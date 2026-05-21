@@ -171,6 +171,69 @@ async function callAI(system, user, provider = null, model = null) {
   }
 }
 /* ════════════════════════════════════════
+CATALOGUE CONTEXT HELPER — inline utility
+════════════════════════════════════════ */
+function getSavedCatalogue() {
+  const saved = { books: [], images: [], links: [], maps: [], videos: [], notes: [] };
+  try {
+    const books = JSON.parse(localStorage.getItem('ba-cat-v3') || '[]');
+    saved.books = books.map(b => ({ id: b.id, title: b.title, author: b.author, year: b.year, topic: b._topic || b.topic, type: 'book' }));
+  } catch (e) {}
+  try {
+    const images = JSON.parse(localStorage.getItem('ba-saved-images-v2') || '[]');
+    saved.images = images.map(i => ({ id: i.id, title: i.title, source: i.source, topics: i.topics || [], type: 'image' }));
+  } catch (e) {}
+  try {
+    const links = JSON.parse(localStorage.getItem('ba-links-saved-v2') || '[]');
+    saved.links = links.map(l => ({ id: l.id, title: l.title, url: l.url, category: l.category, type: 'link' }));
+  } catch (e) {}
+  try {
+    const maps = JSON.parse(localStorage.getItem('ba-maps-v2') || '[]');
+    saved.maps = maps.map(m => ({ id: m.id, title: m.title, year: m.year, source: m.source, type: 'map' }));
+  } catch (e) {}
+  try {
+    const videos = JSON.parse(localStorage.getItem('ba-vid-saved-v2') || '[]');
+    saved.videos = videos.map(v => ({ id: v.id, title: v.title, channel: v.channel, topics: v.topics || [], type: 'video' }));
+  } catch (e) {}
+  try {
+    const notes = JSON.parse(localStorage.getItem('ba-notes-v3') || '[]');
+    saved.notes = notes.map(n => ({ id: n.id, topic: n.topic, text: n.text.slice(0, 200), date: n.date, type: 'note' }));
+  } catch (e) {}
+  const topicsSet = new Set();
+  saved.books.forEach(b => b.topic && topicsSet.add(b.topic));
+  saved.images.forEach(i => i.topics?.forEach(t => topicsSet.add(t)));
+  saved.videos.forEach(v => v.topics?.forEach(t => topicsSet.add(t)));
+  saved.notes.forEach(n => n.topic && topicsSet.add(n.topic));
+  return {
+    ...saved,
+    totalItems: saved.books.length + saved.images.length + saved.links.length + saved.maps.length + saved.videos.length + saved.notes.length,
+    uniqueTopics: Array.from(topicsSet),
+    summary: `You have ${saved.books.length} books, ${saved.images.length} images, ${saved.links.length} links, ${saved.maps.length} maps, ${saved.videos.length} videos, and ${saved.notes.length} notes in your archive. Topics include: ${Array.from(topicsSet).slice(0, 10).join(', ')}${topicsSet.size > 10 ? '...' : ''}`
+  };
+}
+function formatCatalogueForAI(catalogue) {
+  let context = `USER'S SAVED CATALOGUE:\n`;
+  if (catalogue.books.length > 0) {
+    context += `\n📚 BOOKS (${catalogue.books.length}):\n`;
+    catalogue.books.slice(0, 15).forEach(b => { context += `  - "${b.title}" by ${b.author} (${b.year})${b.topic ? ` [Topic: ${b.topic}]` : ''}\n`; });
+    if (catalogue.books.length > 15) context += `  ... and ${catalogue.books.length - 15} more\n`;
+  }
+  if (catalogue.images.length > 0) {
+    context += `\n🖼 IMAGES (${catalogue.images.length}):\n`;
+    catalogue.images.slice(0, 10).forEach(i => { context += `  - ${i.title} [${i.topics?.join(', ') || 'no topic'}]\n`; });
+  }
+  if (catalogue.links.length > 0) {
+    context += `\n🔗 LINKS (${catalogue.links.length}):\n`;
+    catalogue.links.slice(0, 10).forEach(l => { context += `  - ${l.title} (${l.category || 'General'})\n`; });
+  }
+  if (catalogue.notes.length > 0) {
+    context += `\n✍ NOTES (${catalogue.notes.length}):\n`;
+    catalogue.notes.slice(0, 8).forEach(n => { context += `  - [${n.topic || 'General'}]: "${n.text.slice(0, 80)}..."\n`; });
+  }
+  context += `\n${catalogue.summary}`;
+  return context;
+}
+/* ════════════════════════════════════════
 SCRAPING ENGINE — per content type
 ════════════════════════════════════════ */
 async function scrapeBooks(topic, limit = 6) {
@@ -427,7 +490,7 @@ const NAV_ITEMS = [
   { id: "maps", icon: "🗺", label: "Maps" },
   { id: "authors", icon: "✦", label: "Authors" },
   { id: "notes", icon: "✍", label: "Notes" },
-  { id: "settings", icon: "⚙", label: "Settings" }, // NEW
+  { id: "settings", icon: "⚙", label: "Settings" },
 ];
 function Sidebar({ T, tab, setTab, topic, setTopic, dark, setDark, collapsed, setCollapsed }) {
   const W = collapsed ? 64 : 220;
@@ -477,7 +540,101 @@ function Sidebar({ T, tab, setTab, topic, setTopic, dark, setDark, collapsed, se
   );
 }
 /* ════════════════════════════════════════
-SETTINGS SCREEN — NEW
+YEHUDI ASSISTANT — floating chat component
+════════════════════════════════════════ */
+function YehutiAssistant({ T, onClose, onNavigate }) {
+  const [messages, setMessages] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('yehuti-chat-v1') || '[]'); } catch { return []; }
+  });
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef(null);
+  useEffect(() => {
+    localStorage.setItem('yehuti-chat-v1', JSON.stringify(messages));
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg = { role: 'user', content: input, timestamp: new Date().toISOString() };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setLoading(true);
+    const catalogue = getSavedCatalogue();
+    const context = formatCatalogueForAI(catalogue);
+    const systemPrompt = `You are Yehuti, the AI assistant for The Black Archive — a decolonial research platform. You help users explore their personal saved catalogue.
+${context}
+Your capabilities:
+- Answer questions about saved books, images, links, maps, videos, notes
+- Suggest related content from their archive
+- Help them discover connections between topics
+- Provide scholarly insights using decolonial frameworks
+When users ask to "show me" specific items, respond with a JSON action like: 
+{"action":"show","type":"books","filter":"Kongo"} or {"action":"show","type":"images","filter":"Egypt"}
+Keep responses scholarly, warm, and concise. Centre African and diasporal perspectives.`;
+    try {
+      const response = await callAI(systemPrompt, input);
+      const assistantMsg = { role: 'assistant', content: response, timestamp: new Date().toISOString() };
+      setMessages(prev => [...prev, assistantMsg]);
+      const actionMatch = response.match(/\{"action":"show"[^}]*\}/);
+      if (actionMatch && onNavigate) {
+        const action = JSON.parse(actionMatch[0]);
+        if (action.type) onNavigate(action.type, action.filter);
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.', timestamp: new Date().toISOString() }]);
+    }
+    setLoading(false);
+  };
+  const clearChat = () => { setMessages([]); localStorage.removeItem('yehuti-chat-v1'); };
+  return (
+    <div style={{ position: 'fixed', bottom: 20, right: 20, width: 380, height: 520, background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', zIndex: 2000, overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '12px 16px', background: T.isDark ? '#0a0906' : '#f5f0e8', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 20 }}>𓂀</span>
+          <div>
+            <div style={{ fontSize: 14, fontFamily: F.display, fontWeight: 600, color: T.txt0 }}>Yehuti Assistant</div>
+            <div style={{ fontSize: 9, color: T.txt3 }}>Knows your saved archive</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={clearChat} style={{ background: 'none', border: 'none', color: T.txt3, cursor: 'pointer', fontSize: 12 }} title="Clear chat">🗑</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.txt3, cursor: 'pointer', fontSize: 16 }}>×</button>
+        </div>
+      </div>
+      {/* Messages */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {messages.length === 0 && (
+          <div style={{ textAlign: 'center', color: T.txt3, padding: '20px', fontSize: 12 }}>
+            <p>📚 Ask me about your saved archive!</p>
+            <p style={{ marginTop: 8, fontSize: 11 }}>Examples:<br />• "What books do I have on Kongo?"<br />• "Summarize my notes about Diop"<br />• "Show me saved images of ancient Egypt"</p>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+            <div style={{ maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: msg.role === 'user' ? T.ndY : T.bg2, color: msg.role === 'user' ? T.bg0 : T.txt1, fontSize: 12, lineHeight: 1.5, fontFamily: F.body }}>
+              {msg.content}
+              <div style={{ fontSize: 8, color: T.txt3, marginTop: 4 }}>{new Date(msg.timestamp).toLocaleTimeString()}</div>
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+            <div style={{ padding: '8px 12px', borderRadius: 12, background: T.bg2, color: T.txt3, fontSize: 11 }}>Yehuti is thinking...</div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+      {/* Input */}
+      <div style={{ padding: '12px', borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8 }}>
+        <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendMessage()} placeholder="Ask about your saved archive..." style={{ flex: 1, padding: '10px 12px', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 20, color: T.txt0, fontSize: 12, fontFamily: F.body, outline: 'none' }} />
+        <button onClick={sendMessage} disabled={loading} style={{ padding: '8px 16px', background: T.btnP, border: 'none', borderRadius: 20, color: T.btnPTx, cursor: loading ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600 }}>Send</button>
+      </div>
+    </div>
+  );
+}
+/* ════════════════════════════════════════
+SETTINGS SCREEN — AI provider selector
 ════════════════════════════════════════ */
 function SettingsScreen({ T }) {
   const [settings, setSettings] = useState(() => {
@@ -547,7 +704,7 @@ function SettingsScreen({ T }) {
   );
 }
 /* ════════════════════════════════════════
-SCREENS
+SCREENS — FULLY RESTORED FROM v9
 ════════════════════════════════════════ */
 /* ── Universal Search Results ── */
 function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedImages, scrapedLinks, onScrapeAll, scraping, scrapeProgress }) {
@@ -565,7 +722,6 @@ function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedI
     prevQuery.current = globalQuery;
     setAiLoading(true);
     setAiResults(null);
-    // UPDATED: use callAI instead of webSearch
     callAI('You are a decolonial research assistant. Search scholarly and culturally centred sources.', `Search for decolonial and Afrocentric scholarly sources about: "${globalQuery}". Summarise 4–6 key findings with sources, dates, and references. Focus on African and Black diasporal perspectives.`)
       .then(r => { setAiResults(r); setAiLoading(false); }).catch(() => setAiLoading(false));
   }, [globalQuery]);
@@ -720,7 +876,6 @@ function DeepDiveScreen({ T, activeTopic, globalQuery }) {
     if (!topic.trim()) return;
     setLoading(true); setRes(null);
     try {
-      // UPDATED: use callAI instead of callClaude
       const result = await callAI(SYS, `Provide a deep, comprehensive scholarly overview of: "${topic}". Structure your response with clear sections covering: 1) Historical & geographical context, 2) Spiritual/cosmological significance, 3) Key figures and traditions, 4) Connections to the broader African and diasporal world, 5) Colonial distortions and indigenous corrections. Be specific, cite scholars, and centre African epistemologies.`);
       setRes(result);
     } catch { setRes("Request failed."); }
@@ -775,7 +930,6 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
     } catch { }
     setSearching(false);
   };
-  // Filter scraped by query/topic
   const browseable = useMemo(() => {
     let b = [...scrapedBooks];
     if (activeTopic) b = b.filter(bk => bk._topic === activeTopic);
@@ -859,15 +1013,338 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
     </>
   );
 }
-// Note: ImagesScreen, LinksScreen, MapsScreen, VideosScreen, AuthorsScreen, NotesScreen remain unchanged from v9
-// For brevity, they are omitted here but should be copied from v9 with the same structure.
-// In production, include the full components.
-function ImagesScreen({ T, activeTopic, globalQuery, scrapedImages, onScrapeImages, scraping }) { /* ... v9 implementation ... */ return <div>Images placeholder</div>; }
-function LinksScreen({ T, activeTopic, globalQuery, scrapedLinks, onScrapeLinks, scraping }) { /* ... v9 implementation ... */ return <div>Links placeholder</div>; }
-function MapsScreen({ T, activeTopic, globalQuery }) { /* ... v9 implementation ... */ return <div>Maps placeholder</div>; }
-function VideosScreen({ T, activeTopic, globalQuery }) { /* ... v9 implementation ... */ return <div>Videos placeholder</div>; }
-function AuthorsScreen({ T, activeTopic, globalQuery }) { /* ... v9 implementation ... */ return <div>Authors placeholder</div>; }
-function NotesScreen({ T, activeTopic }) { /* ... v9 implementation ... */ return <div>Notes placeholder</div>; }
+/* ── ImagesScreen (fully restored) ── */
+function ImagesScreen({ T, activeTopic, globalQuery, scrapedImages, onScrapeImages, scraping }) {
+  const KEY = "ba-saved-images-v2";
+  const [saved, setSaved] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+  const [view, setView] = useState("browse"); const [selected, setSelected] = useState(null);
+  const imgRef = useRef(null); const [userImages, setUserImages] = useState([]);
+  const persist = u => { setSaved(u); localStorage.setItem(KEY, JSON.stringify(u)); };
+  const inSaved = id => saved.some(x => x.id === id);
+  const toggleSave = img => inSaved(img.id) ? persist(saved.filter(x => x.id !== img.id)) : persist([{ ...img, savedDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }, ...saved]);
+  const handleUpload = e => { Array.from(e.target.files || []).forEach(file => { const reader = new FileReader(); reader.onload = ev => setUserImages(u => [...u, { id: `u${Date.now()}${file.name}`, title: file.name, src: ev.target.result, source: "Uploaded", description: "", topics: [], valid: true }]); reader.readAsDataURL(file); }); };
+  const allImages = useMemo(() => { const base = [...CURATED_IMAGES, ...scrapedImages, ...userImages]; const seen = new Set(); return base.filter(i => { if (!i.src || !i.src.startsWith("http") && !i.src.startsWith("data:")) return false; if (seen.has(i.id)) return false; seen.add(i.id); return true; }); }, [scrapedImages, userImages]);
+  const filtered = useMemo(() => { let imgs = [...allImages]; if (activeTopic) imgs = imgs.filter(i => i.topics?.includes(activeTopic) || !i.topics?.length); if (globalQuery?.trim()) { const q = globalQuery.toLowerCase(); imgs = imgs.filter(i => `${i.title} ${i.description} ${(i.topics || []).join(" ")} ${i.source}`.toLowerCase().includes(q) || q.split(" ").some(w => w.length > 2 && `${i.title} ${i.description}`.toLowerCase().includes(w))); } return imgs; }, [allImages, activeTopic, globalQuery]);
+  const ImgCard = ({ img }) => { const [ok, setOk] = useState(true); if (!ok) return null; return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow, cursor: "pointer" }} onClick={() => setSelected(img)}>
+      <div style={{ height: 165, background: T.bg3, overflow: "hidden", position: "relative" }}>
+        <img src={img.src} alt={img.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={() => setOk(false)} />
+        <div style={{ position: "absolute", top: 7, right: 7 }}>
+          <button onClick={e => { e.stopPropagation(); toggleSave(img); }} style={{ padding: "3px 8px", background: inSaved(img.id) ? T.ndG : "rgba(0,0,0,0.65)", border: `1px solid ${inSaved(img.id) ? T.ok : "rgba(255,255,255,0.2)"}`, borderRadius: 20, color: inSaved(img.id) ? T.okL : "#fff", cursor: "pointer", fontSize: 8, fontFamily: F.body, letterSpacing: 1, textTransform: "uppercase" }}>{inSaved(img.id) ? "✓" : "+ Save"}</button>
+        </div>
+      </div>
+      <div style={{ padding: "10px 12px" }}>
+        <div style={{ fontSize: 12.5, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, marginBottom: 2 }}>{img.title}</div>
+        <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body }}>{img.source}</div>
+      </div>
+    </div>
+  ); };
+  return (
+    <div>
+      {selected && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setSelected(null)}>
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, maxWidth: 780, width: "100%", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 15, color: T.txt0, fontFamily: F.display, fontWeight: 600 }}>{selected.title}</div>
+              <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: T.txt3, cursor: "pointer", fontSize: 20 }}>×</button>
+            </div>
+            <img src={selected.src} alt={selected.title} style={{ width: "100%", maxHeight: 440, objectFit: "contain", background: T.bg3, display: "block" }} />
+            <div style={{ padding: "14px 16px" }}>
+              <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, marginBottom: 5 }}>Source: {selected.source} {selected.year && `· ${selected.year}`}</div>
+              <div style={{ fontSize: 12.5, color: T.txt1, fontFamily: F.body, lineHeight: 1.7, marginBottom: 10 }}>{selected.description}</div>
+              <Btn onClick={() => toggleSave(selected)} v={inSaved(selected.id) ? "green" : "ghost"} T={T}>{inSaved(selected.id) ? "✓ Saved" : "+ Save"}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: "uppercase", fontFamily: F.body }}>Images · {filtered.length} items</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {["browse", "saved"].map(v => (<button key={v} onClick={() => setView(v)} style={{ padding: "5px 12px", background: view === v ? T.ndY : "transparent", border: `1px solid ${view === v ? T.ndY : T.border}`, borderRadius: 20, color: view === v ? T.bg0 : T.txt3, fontSize: 9, cursor: "pointer", letterSpacing: "1px", textTransform: "uppercase", fontFamily: F.body, fontWeight: view === v ? 600 : 400 }}>{v === "saved" ? `Saved (${saved.length})` : v.charAt(0).toUpperCase() + v.slice(1)}</button>))}
+          <button onClick={() => imgRef.current?.click()} style={{ padding: "5px 12px", background: "transparent", border: `1px solid ${T.border}`, borderRadius: 20, color: T.txt3, fontSize: 9, cursor: "pointer", fontFamily: F.body, letterSpacing: "1px", textTransform: "uppercase" }}>📁 Upload</button>
+          <button onClick={() => onScrapeImages(activeTopic)} disabled={scraping} style={{ padding: "5px 12px", background: scraping ? T.bg3 : T.btnP, border: "none", borderRadius: 20, color: scraping ? T.txt3 : T.btnPTx, fontSize: 9, cursor: scraping ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase", fontFamily: F.body, fontWeight: 600 }}>{scraping ? "…" : "⟳ Populate"}</button>
+          <input ref={imgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleUpload} />
+        </div>
+      </div>
+      {view === "browse" && (filtered.length === 0
+        ? <div style={{ textAlign: "center", padding: "40px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>Click ⟳ Populate to load images, or upload your own.</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>{filtered.map(img => <ImgCard key={img.id} img={img} />)}</div>
+      )}
+      {view === "saved" && (saved.length === 0
+        ? <div style={{ textAlign: "center", padding: "40px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>No images saved yet.</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>{saved.map(img => <ImgCard key={img.id} img={img} />)}</div>
+      )}
+    </div>
+  );
+}
+/* ── LinksScreen (fully restored) ── */
+function LinksScreen({ T, activeTopic, globalQuery, scrapedLinks, onScrapeLinks, scraping }) {
+  const KEY = "ba-links-saved-v2";
+  const [saved, setSaved] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+  const [adding, setAdding] = useState(false);
+  const [newUrl, setNewUrl] = useState(""); const [newTitle, setNewTitle] = useState(""); const [newDesc, setNewDesc] = useState(""); const [newCat, setNewCat] = useState("General");
+  const persist = u => { setSaved(u); localStorage.setItem(KEY, JSON.stringify(u)); };
+  const inSaved = id => saved.some(x => x.id === id);
+  const toggleSave = l => inSaved(l.id) ? persist(saved.filter(x => x.id !== l.id)) : persist([{ ...l, savedDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }, ...saved]);
+  const addCustom = () => { if (!newUrl.trim() || !newTitle.trim()) return; const l = { id: `c${Date.now()}`, title: newTitle, url: newUrl, domain: newUrl.replace(/https?:\/\//, "").split("/")[0], description: newDesc, category: newCat }; persist([{ ...l, savedDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }, ...saved]); setNewUrl(""); setNewTitle(""); setNewDesc(""); setAdding(false); };
+  const allLinks = useMemo(() => { const base = [...CURATED_LINKS, ...scrapedLinks]; const seen = new Set(); return base.filter(l => { if (!l.url || !l.title || !l.url.startsWith("http")) return false; if (seen.has(l.id)) return false; seen.add(l.id); return true; }); }, [scrapedLinks]);
+  const filtered = useMemo(() => { let ls = [...allLinks]; if (globalQuery?.trim()) { const q = globalQuery.toLowerCase(); ls = ls.filter(l => `${l.title} ${l.description} ${l.category || ""} ${l.topic || ""}`.toLowerCase().includes(q) || q.split(" ").some(w => w.length > 2 && `${l.title} ${l.description}`.toLowerCase().includes(w))); } return ls; }, [allLinks, globalQuery]);
+  const LinkCard = ({ l, showRemove = false }) => (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "13px 16px", marginBottom: 9, boxShadow: T.shadow }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 5 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <a href={l.url} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+            <div style={{ fontSize: 13.5, color: T.ndY, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, marginBottom: 2, cursor: "pointer" }}>{l.title}</div>
+          </a>
+          <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body }}>🔗 {l.domain}{l.savedDate && `· Saved ${l.savedDate}`}</div>
+        </div>
+        {l.category && <Pill label={l.category} color="blue" T={T} />}
+      </div>
+      <div style={{ fontSize: 12, color: T.txt2, fontFamily: F.body, lineHeight: 1.65, marginBottom: 9 }}>{(l.description || "").replace(/<[^>]*>/g, "").slice(0, 200)}</div>
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+        <Btn href={l.url} v="primary" T={T} sm>↗ Visit</Btn>
+        {!showRemove ? <Btn onClick={() => toggleSave(l)} v={inSaved(l.id) ? "green" : "ghost"} T={T} sm>{inSaved(l.id) ? "✓ Saved" : "+ Save"}</Btn>
+          : <Btn onClick={() => persist(saved.filter(x => x.id !== l.id))} T={T} sm>Remove</Btn>}
+      </div>
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: "uppercase", fontFamily: F.body }}>Links · {filtered.length} resources</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => setAdding(a => !a)} style={{ padding: "5px 12px", background: adding ? T.ndY : "transparent", border: `1px solid ${adding ? T.ndY : T.border}`, borderRadius: 20, color: adding ? T.bg0 : T.txt3, fontSize: 9, cursor: "pointer", fontFamily: F.body, letterSpacing: "1px", textTransform: "uppercase" }}>+ Add</button>
+          <button onClick={() => onScrapeLinks(activeTopic)} disabled={scraping} style={{ padding: "5px 12px", background: scraping ? T.bg3 : T.btnP, border: "none", borderRadius: 20, color: scraping ? T.txt3 : T.btnPTx, fontSize: 9, cursor: scraping ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase", fontFamily: F.body, fontWeight: 600 }}>{scraping ? "…" : "⟳ Populate"}</button>
+        </div>
+      </div>
+      {adding && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "16px 18px", marginBottom: 16, boxShadow: T.shadow }}>
+          {[["Title", newTitle, setNewTitle], ["URL (https://…)", newUrl, setNewUrl], ["Description (optional)", newDesc, setNewDesc]].map(([ph, val, set]) => (
+            <input key={ph} style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 12, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder={ph} value={val} onChange={e => set(e.target.value)} />
+          ))}
+          <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+            {["Academic", "Archive", "Philosophy", "Library", "Journals", "Encyclopedia", "General"].map(c => (<button key={c} onClick={() => setNewCat(c)} style={{ padding: "4px 10px", background: newCat === c ? T.ndY : "transparent", border: `1px solid ${newCat === c ? T.ndY : T.border}`, borderRadius: 20, color: newCat === c ? T.bg0 : T.txt3, fontSize: 9, cursor: "pointer", fontFamily: F.body }}>{c}</button>))}
+          </div>
+          <div style={{ display: "flex", gap: 7 }}> <button onClick={addCustom} style={{ padding: "8px 18px", background: T.btnP, border: "none", borderRadius: 6, color: T.btnPTx, cursor: "pointer", fontSize: 10, fontFamily: F.body, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Save</button> <Btn onClick={() => setAdding(false)} T={T} sm>Cancel</Btn> </div>
+        </div>
+      )}
+      {globalQuery?.trim() && <div style={{ fontSize: 10, color: T.txt2, fontFamily: F.body, marginBottom: 12 }}>Filtered by: <span style={{ color: T.ndY }}>{globalQuery}</span></div>}
+      {filtered.map(l => <LinkCard key={l.id} l={l} />)}
+      {filtered.length === 0 && <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>No links yet. Click ⟳ Populate or + Add to build your resource collection.</div>}
+      {saved.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 10, letterSpacing: 3, color: T.ok, textTransform: "uppercase", fontFamily: F.body, marginBottom: 12 }}>✓ Saved Links ({saved.length})</div>
+          {saved.map(l => <LinkCard key={l.id} l={l} showRemove />)}
+        </div>
+      )}
+    </div>
+  );
+}
+/* ── MapsScreen (fully restored) ── */
+function MapsScreen({ T, activeTopic, globalQuery }) {
+  const KEY = "ba-maps-v2";
+  const [saved, setSaved] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+  const [viewing, setViewing] = useState(null);
+  const persist = u => { setSaved(u); localStorage.setItem(KEY, JSON.stringify(u)); };
+  const inSaved = id => saved.some(m => m.id === id);
+  const toggleSave = map => inSaved(map.id) ? persist(saved.filter(m => m.id !== map.id)) : persist([{ ...map, savedDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }, ...saved]);
+  const filtered = useMemo(() => { let maps = [...OLD_MAPS]; if (activeTopic) maps = maps.filter(m => m.topics?.includes(activeTopic) || !m.topics?.length); if (globalQuery?.trim()) { const q = globalQuery.toLowerCase(); maps = maps.filter(m => `${m.title} ${m.description} ${(m.topics || []).join(" ")} ${m.source} ${m.year}`.toLowerCase().includes(q) || q.split(" ").some(w => w.length > 2 && `${m.title} ${m.description}`.toLowerCase().includes(w))); } return maps; }, [activeTopic, globalQuery]);
+  return (
+    <div>
+      {viewing && <MapViewer map={viewing} onClose={() => setViewing(null)} T={T} />}
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "13px 16px", marginBottom: 18, boxShadow: T.shadow }}>
+        <div style={{ fontSize: 12, color: T.txt1, fontFamily: F.body, lineHeight: 1.7 }}>
+          <span style={{ color: T.ndY, fontWeight: 600 }}>Cartographic Decolonisation:</span> Maps showing the world before colonial renaming — including the Atlantic as the <em>Ethiopian Sea</em>, Africa at the centre, and kingdoms Europe later erased. Click any map to view it in full detail inline.
+        </div>
+      </div>
+      {globalQuery?.trim() && <div style={{ fontSize: 10, color: T.txt2, fontFamily: F.body, marginBottom: 12 }}>Filtered by: <span style={{ color: T.ndY }}>{globalQuery}</span> — {filtered.length} maps</div>}
+      {saved.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 9, color: T.ok, fontFamily: F.body, letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 }}>✓ Saved Maps ({saved.length})</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 12 }}>
+            {saved.map(m => <MapCard key={m.id} map={m} saved={true} onSave={() => toggleSave(m)} onView={setViewing} T={T} />)}
+          </div>
+          <div style={{ height: 1, background: T.border, margin: "20px 0" }} />
+        </div>
+      )}
+      <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, letterSpacing: 2, textTransform: "uppercase", marginBottom: 12 }}>All Maps — {filtered.length}</div>
+      {filtered.length === 0
+        ? <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>No maps match your search.</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 14 }}>
+          {filtered.map(m => <MapCard key={m.id} map={m} saved={inSaved(m.id)} onSave={() => toggleSave(m)} onView={setViewing} T={T} />)}
+        </div>}
+    </div>
+  );
+}
+/* ── VideosScreen (fully restored) ── */
+function VideosScreen({ T, activeTopic, globalQuery }) {
+  const KEY = "ba-vid-saved-v2";
+  const [saved, setSaved] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+  const [playing, setPlaying] = useState(null);
+  const persist = u => { setSaved(u); localStorage.setItem(KEY, JSON.stringify(u)); };
+  const inSaved = id => saved.some(v => v.id === id);
+  const toggleSave = v => inSaved(v.id) ? persist(saved.filter(x => x.id !== v.id)) : persist([{ ...v, savedDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }, ...saved]);
+  const filtered = useMemo(() => { let vs = [...CURATED_VIDEOS]; if (activeTopic) vs = vs.filter(v => v.topics?.includes(activeTopic)); if (globalQuery?.trim()) { const q = globalQuery.toLowerCase(); vs = vs.filter(v => `${v.title} ${v.description} ${(v.topics || []).join(" ")} ${v.channel}`.toLowerCase().includes(q) || q.split(" ").some(w => w.length > 2 && `${v.title} ${v.description}`.toLowerCase().includes(w))); } return vs; }, [activeTopic, globalQuery]);
+  const VideoCard = ({ v }) => (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow }}>
+      {playing === v.youtubeId ? (
+        <iframe src={`https://www.youtube.com/embed/${v.youtubeId}?autoplay=1`} style={{ width: "100%", height: 215, border: "none", display: "block" }} allowFullScreen title={v.title} />
+      ) : (
+        <div style={{ position: "relative", cursor: "pointer", height: 172, background: "#000", overflow: "hidden" }} onClick={() => setPlaying(v.youtubeId)}>
+          <img src={`https://img.youtube.com/vi/${v.youtubeId}/hqdefault.jpg`} alt={v.title} style={{ width: "100%", height: "100%", objectFit: "cover", opacity: 0.88 }} onError={e => e.target.style.opacity = "0"} />
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 50, height: 50, borderRadius: "50%", background: `rgba(232,184,0,0.92)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>▶</div>
+          </div>
+          {v.duration && <div style={{ position: "absolute", bottom: 7, right: 9, background: "rgba(0,0,0,0.8)", color: "#fff", fontSize: 9, padding: "2px 7px", borderRadius: 4, fontFamily: F.body }}>{v.duration}</div>}
+        </div>
+      )}
+      <div style={{ padding: "12px 14px" }}>
+        <div style={{ fontSize: 13.5, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, marginBottom: 3 }}>{v.title}</div>
+        <div style={{ fontSize: 10, color: T.ndY, fontFamily: F.body, marginBottom: 5 }}>{v.channel}</div>
+        <div style={{ fontSize: 11.5, color: T.txt2, fontFamily: F.body, lineHeight: 1.6, marginBottom: 9 }}>{v.description}</div>
+        {v.topics?.length > 0 && <div style={{ marginBottom: 9 }}>{v.topics.map(t => <Pill key={t} label={t} T={T} />)}</div>}
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          <Btn v="primary" onClick={() => setPlaying(playing === v.youtubeId ? null : v.youtubeId)} T={T} sm>{playing === v.youtubeId ? "⏹ Stop" : "▶ Play"}</Btn>
+          <Btn href={`https://youtube.com/watch?v=${v.youtubeId}`} T={T} sm>↗ YouTube</Btn>
+          <Btn onClick={() => toggleSave(v)} v={inSaved(v.id) ? "green" : "ghost"} T={T} sm>{inSaved(v.id) ? "✓ Saved" : "+ Save"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: "uppercase", fontFamily: F.body, marginBottom: 16 }}>Videos · {filtered.length} curated{globalQuery?.trim() ? ` matching "${globalQuery}"` : ""}</div>
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>No videos match your search.</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 14 }}>{filtered.map(v => <VideoCard key={v.id} v={v} />)}</div>}
+    </div>
+  );
+}
+/* ── AuthorsScreen (fully restored) ── */
+function AuthorsScreen({ T, activeTopic, globalQuery }) {
+  const [selected, setSelected] = useState(null); const [summary, setSummary] = useState({}); const [loading, setLoading] = useState({}); const [photo, setPhoto] = useState({});
+  useEffect(() => { KEY_AUTHORS.forEach(a => { fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(a.name)}&prop=pageimages&format=json&pithumbsize=200&origin=*`).then(r => r.json()).then(d => setPhoto(p => ({ ...p, [a.id]: Object.values(d?.query?.pages || {})[0]?.thumbnail?.source || null }))).catch(() => { }); }); }, []);
+  const openAuthor = async a => {
+    setSelected(a);
+    if (!summary[a.id]) { setLoading(l => ({ ...l, [a.id]: true })); try { const r = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(a.name)}&prop=extracts&exintro=true&explaintext=true&format=json&origin=*`); const d = await r.json(); const ex = Object.values(d?.query?.pages || {})[0]?.extract || ""; setSummary(p => ({ ...p, [a.id]: ex.slice(0, 600) + (ex.length > 600 ? "…" : "") })); } catch { } setLoading(l => ({ ...l, [a.id]: false })); }
+  };
+  const filtered = useMemo(() => { let as = [...KEY_AUTHORS]; if (activeTopic) as = as.filter(a => a.topics?.includes(activeTopic)); if (globalQuery?.trim()) { const q = globalQuery.toLowerCase(); as = as.filter(a => `${a.name} ${a.field} ${a.legacy} ${(a.topics || []).join(" ")} ${(a.works || []).join(" ")}`.toLowerCase().includes(q)); } return as; }, [activeTopic, globalQuery]);
+  return (
+    <div>
+      {selected && (
+        <div style={{ position: "fixed", inset: 0, background: T.isDark ? "rgba(4,3,2,0.97)" : "rgba(245,240,232,0.97)", zIndex: 3000, display: "flex", flexDirection: "column", overflowY: "auto" }}>
+          <div style={{ padding: "11px 18px", background: T.card, borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 12, flexShrink: 0, position: "sticky", top: 0, zIndex: 10 }}>
+            <div style={{ flex: 1 }}> <div style={{ fontSize: 17, color: T.txt0, fontFamily: F.display, fontWeight: 600 }}>{selected.name}</div> <div style={{ fontSize: 10, color: T.txt2, fontFamily: F.body }}>{selected.dates} · {selected.origin}</div> </div>
+            <button onClick={() => setSelected(null)} style={{ padding: "6px 13px", background: "transparent", border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt2, cursor: "pointer", fontSize: 10, fontFamily: F.body, letterSpacing: 1, textTransform: "uppercase" }}>✕ Close</button>
+          </div>
+          <NdStripe h={3} />
+          <div style={{ maxWidth: 680, margin: "0 auto", padding: "24px 22px", width: "100%", boxSizing: "border-box" }}>
+            <div style={{ display: "flex", gap: 22, marginBottom: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ width: 96, height: 96, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `3px solid ${T.ndY}`, background: T.bg3, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {photo[selected.id] ? <img src={photo[selected.id]} alt={selected.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 30, color: T.ndY, fontFamily: F.display, fontWeight: 600 }}>{selected.name.split(" ").map(w => w[0]).slice(0, 2).join(" ")}</span>}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 24, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.2, marginBottom: 5 }}>{selected.name}</div>
+                <div style={{ fontSize: 12, color: T.ndY, fontFamily: F.body, fontWeight: 500, marginBottom: 3 }}>{selected.field}</div>
+                <div style={{ fontSize: 11, color: T.txt2, fontFamily: F.body, marginBottom: 8 }}>{selected.dates} · {selected.origin}</div>
+                <div style={{ display: "flex", flexWrap: "wrap" }}>{selected.topics?.map(t => <Pill key={t} label={t} T={T} />)}</div>
+              </div>
+            </div>
+            {[{ heading: "Legacy & Significance", content: selected.legacy, accent: true }, { heading: "Overview", content: loading[selected.id] ? "Loading…" : summary[selected.id] || "No summary available." }].map(({ heading, content, accent }) => (
+              <div key={heading} style={{ background: T.card, border: `1px solid ${T.border}`, borderLeft: accent ? `4px solid ${T.ndY}` : "none", borderRadius: 8, padding: "16px 18px", marginBottom: 16, boxShadow: T.shadow }}>
+                <div style={{ fontSize: 9, color: T.ndY, fontFamily: F.body, letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>{heading}</div>
+                <div style={{ fontSize: 13, color: T.txt1, fontFamily: F.body, lineHeight: 1.75 }}>{content}</div>
+              </div>
+            ))}
+            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "16px 18px", marginBottom: 16, boxShadow: T.shadow }}>
+              <div style={{ fontSize: 9, color: T.ndY, fontFamily: F.body, letterSpacing: 2, textTransform: "uppercase", marginBottom: 12 }}>Key Works</div>
+              {selected.works.map((w, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < selected.works.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                  <div style={{ width: 28, height: 38, background: `linear-gradient(160deg,${T.ndB}50,${T.bg3})`, borderRadius: 2, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9 }}>📖</div>
+                  <div>
+                    <div style={{ fontSize: 12.5, color: T.txt0, fontFamily: F.display, fontWeight: 600 }}>{w}</div>
+                    <a href={`https://openlibrary.org/search?q=${encodeURIComponent(w + " " + selected.name)}`} target="_blank" rel="noreferrer" style={{ fontSize: 9, color: T.ndYd, fontFamily: F.body, textDecoration: "none" }}>Search on Open Library →</a>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Btn href={`https://en.wikipedia.org/wiki/${encodeURIComponent(selected.name)}`} v="primary" T={T}>↗ Full Wikipedia Article</Btn>
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: "uppercase", fontFamily: F.body, marginBottom: 16 }}>Key Scholars — {filtered.length}</div>
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>No authors match your search.</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 12 }}>
+          {filtered.map(a => (
+            <div key={a.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "18px", boxShadow: T.shadow, cursor: "pointer" }} onClick={() => openAuthor(a)}>
+              <div style={{ display: "flex", gap: 14, marginBottom: 10 }}>
+                <div style={{ width: 60, height: 60, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `2px solid ${T.ndY}`, background: T.bg3, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {photo[a.id] ? <img src={photo[a.id]} alt={a.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 20, color: T.ndY, fontFamily: F.display, fontWeight: 600 }}>{a.name.split(" ").map(w => w[0]).slice(0, 2).join(" ")}</span>}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14.5, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, marginBottom: 2 }}>{a.name}</div>
+                  <div style={{ fontSize: 10, color: T.ndY, fontFamily: F.body, fontWeight: 500, marginBottom: 1 }}>{a.field}</div>
+                  <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body }}>{a.dates} · {a.origin}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 11.5, color: T.txt2, fontFamily: F.body, lineHeight: 1.6, marginBottom: 9 }}>{a.legacy}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", marginBottom: 8 }}>{a.topics?.slice(0, 2).map(t => <Pill key={t} label={t} T={T} />)}</div>
+              <div style={{ fontSize: 10, color: T.ndY, fontFamily: F.body }}>View full profile →</div>
+            </div>
+          ))}
+        </div>}
+    </div>
+  );
+}
+/* ── NotesScreen (fully restored) ── */
+function NotesScreen({ T, activeTopic }) {
+  const KEY = "ba-notes-v3";
+  const [notes, setNotes] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+  const [draft, setDraft] = useState(""); const [dT, setDT] = useState(activeTopic || ""); const [dS, setDS] = useState("");
+  const [mediaOpen, setMediaOpen] = useState(false); const [mediaItems, setMediaItems] = useState([]); const [mediaInput, setMediaInput] = useState(""); const [mediaType, setMediaType] = useState("link");
+  const imgRef = useRef(null);
+  useEffect(() => { if (activeTopic) setDT(activeTopic); }, [activeTopic]);
+  const addMedia = () => { if (!mediaInput.trim()) return; setMediaItems(m => [...m, { type: mediaType, value: mediaInput.trim(), label: mediaInput.trim() }]); setMediaInput(""); };
+  const save = () => { if (!draft.trim()) return; const n = { id: Date.now(), topic: dT, source: dS, text: draft, media: mediaItems, date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }; const u = [n, ...notes]; setNotes(u); localStorage.setItem(KEY, JSON.stringify(u)); setDraft(""); setDS(""); setMediaItems([]); setMediaOpen(false); };
+  const del = id => { const u = notes.filter(n => n.id !== id); setNotes(u); localStorage.setItem(KEY, JSON.stringify(u)); };
+  const filtered = activeTopic ? notes.filter(n => n.topic === activeTopic) : notes;
+  const handleUpload = e => { const file = e.target.files?.[0]; if (!file) return; const r = new FileReader(); r.onload = ev => setMediaItems(m => [...m, { type: "image", value: ev.target.result, label: file.name }]); r.readAsDataURL(file); };
+  return (
+    <div>
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18, boxShadow: T.shadow }}>
+        <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="Topic" value={dT} onChange={e => setDT(e.target.value)} />
+        <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="Source / reference (optional)" value={dS} onChange={e => setDS(e.target.value)} />
+        <textarea style={{ width: "100%", boxSizing: "border-box", minHeight: 100, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, resize: "vertical", outline: "none", lineHeight: 1.7, display: "block" }} placeholder="Write your note, annotation, or insight…" value={draft} onChange={e => setDraft(e.target.value)} />
+        {mediaItems.length > 0 && <div style={{ marginTop: 9, display: "flex", flexWrap: "wrap", gap: 7 }}>{mediaItems.map((m, i) => (<div key={i} style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, padding: "4px 9px", display: "flex", alignItems: "center", gap: 7 }}>{m.type === "image" && <img src={m.value} alt="" style={{ width: 28, height: 28, objectFit: "cover", borderRadius: 3 }} />}{m.type === "video" && <span style={{ fontSize: 11 }}>🎬</span>}{m.type === "link" && <span style={{ fontSize: 11 }}>🔗</span>} <span style={{ fontSize: 10, color: T.txt2, fontFamily: F.body, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.label}</span> <button onClick={() => setMediaItems(items => items.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: T.txt3, cursor: "pointer", fontSize: 13 }}>×</button> </div>))} </div>}
+        <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 10 }}>
+          <button onClick={() => setMediaOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", cursor: "pointer", color: T.txt2, fontSize: 10, fontFamily: F.body }}>＋ Add Media {mediaOpen ? "▲" : "▼"}</button>
+          {mediaOpen && (<div style={{ marginTop: 9, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+              {[["link", "🔗 Link"], ["video", "🎬 Video"], ["image", "🖼 URL"]].map(([v, l]) => (<button key={v} onClick={() => setMediaType(v)} style={{ padding: "4px 10px", background: mediaType === v ? T.ndY : "transparent", border: `1px solid ${mediaType === v ? T.ndY : T.border}`, borderRadius: 20, color: mediaType === v ? T.bg0 : T.txt2, fontSize: 9, cursor: "pointer", fontFamily: F.body, fontWeight: mediaType === v ? 600 : 400 }}>{l}</button>))}
+              <button onClick={() => imgRef.current?.click()} style={{ padding: "4px 10px", background: "transparent", border: `1px solid ${T.border}`, borderRadius: 20, color: T.txt2, fontSize: 9, cursor: "pointer", fontFamily: F.body }}>📁 Upload</button>
+              <input ref={imgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleUpload} />
+            </div>
+            <div style={{ display: "flex", gap: 7 }}>
+              <input style={{ flex: 1, background: T.bg1, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "8px 12px", fontSize: 12, fontFamily: F.body, outline: "none" }} placeholder={mediaType === "link" ? "Paste URL…" : mediaType === "video" ? "YouTube / Vimeo URL…" : "Image URL…"} value={mediaInput} onChange={e => setMediaInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addMedia()} />
+              <button onClick={addMedia} style={{ padding: "8px 14px", background: T.btnP, border: "none", borderRadius: 6, color: T.btnPTx, cursor: "pointer", fontSize: 9, fontFamily: F.body, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", whiteSpace: "nowrap" }}>Add</button>
+            </div>
+          </div>)}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}> <button onClick={save} style={{ padding: "9px 22px", background: T.btnP, border: "none", borderRadius: 6, color: T.btnPTx, cursor: "pointer", fontSize: 10, fontFamily: F.body, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Save Note</button> </div>
+      </div>
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: "40px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>{activeTopic ? `No notes for "${activeTopic}" yet.` : "No notes saved yet."}</div>
+        : filtered.map(n => (<div key={n.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderLeft: `3px solid ${T.ndY}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10, boxShadow: T.shadow }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+            <div style={{ display: "flex", flexWrap: "wrap" }}>{n.topic && <Pill label={n.topic} T={T} />}{n.source && <span style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, marginTop: 5 }}>↗ {n.source}</span>} </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexShrink: 0, marginLeft: 8 }}> <span style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, whiteSpace: "nowrap" }}>{n.date}</span> <button onClick={() => del(n.id)} style={{ background: "none", border: "none", color: T.txt3, cursor: "pointer", fontSize: 15 }}>×</button> </div>
+          </div>
+          <div style={{ fontSize: 13, color: T.txt1, fontFamily: F.body, lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: n.media?.length ? 10 : 0 }}>{n.text}</div>
+          {n.media?.length > 0 && (<div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+            {n.media.map((m, i) => (<div key={i}>{m.type === "image" && <img src={m.value} alt={m.label} style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 6, objectFit: "contain", background: T.bg3, display: "block" }} />}{m.type === "video" && (() => { const yt = m.value.match(/(?:youtube.com\/watch\?v=|youtu.be\/)([a-zA-Z0-9_-]{11})/); const vi = m.value.match(/vimeo.com\/(\d+)/); if (yt) return <iframe src={`https://www.youtube.com/embed/${yt[1]}`} style={{ width: "100%", height: 210, border: "none", borderRadius: 6 }} allowFullScreen title={m.label} />; if (vi) return <iframe src={`https://player.vimeo.com/video/${vi[1]}`} style={{ width: "100%", height: 210, border: "none", borderRadius: 6 }} allowFullScreen title={m.label} />; return <a href={m.value} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: T.ndY, fontFamily: F.body }}>🎬 {m.label}</a>; })()}{m.type === "link" && <a href={m.value} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.ndY, fontFamily: F.body, fontSize: 11.5, textDecoration: "none", overflow: "hidden" }}> <span style={{ flexShrink: 0 }}>🔗</span> <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.label}</span> </a>} </div>))}
+          </div>)}
+        </div>))}
+    </div>
+  );
+}
 /* ════════════════════════════════════════
 ROOT APP
 ════════════════════════════════════════ */
@@ -879,6 +1356,7 @@ export default function App() {
   const [searchInput, setSearchInput] = useState("");
   const [globalQuery, setGlobalQuery] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false); // NEW: Yehuti Assistant state
   // ── Scraped content stores ──
   const [scrapedBooks, setScrapedBooks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-books") || "[]"); } catch { return []; } });
   const [scrapedImages, setScrapedImages] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-images") || "[]"); } catch { return []; } });
@@ -978,8 +1456,13 @@ export default function App() {
               <button onClick={submitSearch} style={{ background: TH.btnP, border: "none", borderRadius: 22, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, fontSize: 15, margin: "0 2px" }}>🔎</button>
             </div>
           </div>
-          {/* Right */}
-          <div style={{ width: 40, height: 4, borderRadius: 2, overflow: "hidden", flexShrink: 0 }}><NdStripe h={4} /></div>
+          {/* Right — Assistant Button + Stripe */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setAssistantOpen(true)} style={{ background: TH.btnP, border: "none", borderRadius: 20, padding: "6px 14px", color: TH.btnPTx, cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>𓂀</span> Yehuti
+            </button>
+            <div style={{ width: 40, height: 4, borderRadius: 2, overflow: "hidden", flexShrink: 0 }}><NdStripe h={4} /></div>
+          </div>
         </div>
         <NdStripe h={3} />
         {/* ── CONTENT ── */}
@@ -1030,10 +1513,22 @@ export default function App() {
             {tab === "maps" && <MapsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "authors" && <AuthorsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "notes" && <NotesScreen T={TH} activeTopic={topic} />}
-            {tab === "settings" && <SettingsScreen T={TH} />} {/* NEW */}
+            {tab === "settings" && <SettingsScreen T={TH} />}
           </div>
         </div>
       </div>
+      {/* ── YEHUDI ASSISTANT FLOATING CHAT ── */}
+      {assistantOpen && (
+        <YehutiAssistant
+          T={TH}
+          onClose={() => setAssistantOpen(false)}
+          onNavigate={(tabName, filter) => {
+            setTab(tabName);
+            if (filter) setGlobalQuery(filter);
+            setAssistantOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
