@@ -542,6 +542,7 @@ const NAV_ITEMS = [
   { id: "maps", icon: "🗺", label: "Maps" },
   { id: "authors", icon: "✦", label: "Authors" },
   { id: "notes", icon: "✍", label: "Notes" },
+  { id: "library", icon: "📁", label: "Library" },
   { id: "settings", icon: "⚙", label: "Settings" },
 ];
 function Sidebar({ T, tab, setTab, topic, setTopic, dark, setDark, collapsed, setCollapsed }) {
@@ -666,6 +667,7 @@ Keep responses scholarly, warm, and concise. Centre African and diasporal perspe
           <div key={i} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
             <div style={{ maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: msg.role === 'user' ? T.ndY : T.bg2, color: msg.role === 'user' ? T.bg0 : T.txt1, fontSize: 12, lineHeight: 1.5, fontFamily: F.body }}>
               {msg.content}
+              {msg.image && <img src={msg.image} alt="Shared" style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, marginTop: 6, display: 'block' }} />}
               <div style={{ fontSize: 8, color: T.txt3, marginTop: 4 }}>{new Date(msg.timestamp).toLocaleTimeString()}</div>
             </div>
           </div>
@@ -678,7 +680,19 @@ Keep responses scholarly, warm, and concise. Centre African and diasporal perspe
         <div ref={messagesEndRef} />
       </div>
       {/* Input */}
-      <div style={{ padding: '12px', borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8 }}>
+      <div style={{ padding: '12px', borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <label style={{ padding: '8px 0', cursor: 'pointer', fontSize: 20, flexShrink: 0, lineHeight: 1 }} title="Attach image">
+          <span>🖼</span>
+          <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+              setMessages(prev => [...prev, { role: 'user', content: '[Image shared]', image: ev.target.result, timestamp: new Date().toISOString() }]);
+            };
+            reader.readAsDataURL(file);
+          }} />
+        </label>
         <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendMessage()} placeholder="Ask about your saved archive..." style={{ flex: 1, padding: '10px 12px', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 20, color: T.txt0, fontSize: 12, fontFamily: F.body, outline: 'none' }} />
         <button onClick={sendMessage} disabled={loading} style={{ padding: '8px 16px', background: T.btnP, border: 'none', borderRadius: 20, color: T.btnPTx, cursor: loading ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600 }}>Send</button>
       </div>
@@ -688,9 +702,25 @@ Keep responses scholarly, warm, and concise. Centre African and diasporal perspe
 /* ════════════════════════════════════════
 SETTINGS SCREEN — AI provider selector
 ════════════════════════════════════════ */
+function KeyInput({ providerId, name, hint, settings, saveSettings, T }) {
+  const [showKey, setShowKey] = useState(false);
+  const key = (settings.apiKeys && settings.apiKeys[providerId]) || "";
+  return (
+    <div style={{ marginBottom: 9 }}>
+      <div style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, marginBottom: 3, display: "flex", justifyContent: "space-between" }}>
+        <span>{name} Key</span>
+        {key && <span style={{ color: T.ok, fontSize: 8 }}>{showKey ? "visible" : "••••"}</span>}
+      </div>
+      <div style={{ display: "flex", gap: 4 }}>
+        <input type={showKey ? "text" : "password"} value={key} onChange={e => { const newKeys = { ...(settings.apiKeys || {}), [providerId]: e.target.value }; saveSettings({ apiKeys: newKeys }); }} placeholder={hint} style={{ flex: 1, padding: "7px 10px", background: T.bg1, border: `1px solid ${T.border}`, borderRadius: 5, color: T.txt0, fontSize: 11, fontFamily: "monospace", outline: "none" }} />
+        <button onClick={() => setShowKey(s => !s)} style={{ padding: "5px 8px", background: "none", border: `1px solid ${T.border}`, borderRadius: 5, color: T.txt3, cursor: "pointer", fontSize: 11, fontFamily: F.body }}>{showKey ? "\uD83D\uDE48" : "\uD83D\uDC41"}</button>
+      </div>
+    </div>
+  );
+}
 function SettingsScreen({ T }) {
   const [settings, setSettings] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514"}'); } catch { return { provider: "anthropic", model: "claude-sonnet-4-20250514" }; }
+    try { return JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514","apiKeys":{}}'); } catch { return { provider: "anthropic", model: "claude-sonnet-4-20250514", apiKeys: {} }; }
   });
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -734,12 +764,13 @@ function SettingsScreen({ T }) {
           </select>
         </div>
         <div style={{ background: T.bg2, border: `1px dashed ${T.border}`, borderRadius: 8, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: T.txt3, fontFamily: F.body, marginBottom: 8 }}>🔐 API Keys are stored securely in Vercel environment variables:</div>
-          <div style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, lineHeight: 1.6 }}>
-            • ANTHROPIC_API_KEY<br />
-            • OPENAI_API_KEY<br />
-            • GEMINI_API_KEY<br />
-            • MISTRAL_API_KEY
+          <div style={{ fontSize: 10, color: T.txt3, fontFamily: F.body, marginBottom: 10 }}>🔐 Your API Keys (stored in your browser only):</div>
+          <KeyInput providerId="anthropic" name="Anthropic" hint="sk-ant-..." settings={settings} saveSettings={saveSettings} T={T} />
+          <KeyInput providerId="openai" name="OpenAI" hint="sk-..." settings={settings} saveSettings={saveSettings} T={T} />
+          <KeyInput providerId="google" name="Google Gemini" hint="AIza..." settings={settings} saveSettings={saveSettings} T={T} />
+          <KeyInput providerId="mistral" name="Mistral" hint="..." settings={settings} saveSettings={saveSettings} T={T} />
+          <div style={{ fontSize: 8, color: T.txt3, fontFamily: F.body, marginTop: 10, lineHeight: 1.5 }}>
+            Keys used for direct API fallback. On Vercel, the proxy handles calls so keys stay on the server. Leave empty if deploying with Vercel env vars.
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1397,6 +1428,67 @@ function NotesScreen({ T, activeTopic }) {
     </div>
   );
 }
+/* ── LibraryScreen ── */
+function LibraryScreen({ T, activeTopic }) {
+  const KEY = "ba-library-v1";
+  const [files, setFiles] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState(""); const [topic, setTopic] = useState(activeTopic || ""); const [desc, setDesc] = useState("");
+  const fileRef = useRef(null);
+  useEffect(() => { if (activeTopic) setTopic(activeTopic); }, [activeTopic]);
+  const persist = u => { setFiles(u); localStorage.setItem(KEY, JSON.stringify(u)); };
+  const addFile = () => {
+    if (!name.trim()) return;
+    const f = { id: Date.now(), name: name.trim(), topic, description: desc.trim(), date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }), type: "file" };
+    const file = fileRef.current?.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = ev => { f.dataUrl = ev.target.result; f.type = file.type.startsWith("image/") ? "image" : file.type === "application/pdf" ? "pdf" : "file"; f.fileName = file.name; persist([f, ...files]); setName(""); setDesc(""); };
+      reader.readAsDataURL(file);
+    } else {
+      persist([f, ...files]);
+      setName(""); setDesc("");
+    }
+    setAdding(false);
+  };
+  const remove = id => persist(files.filter(f => f.id !== id));
+  const filtered = activeTopic ? files.filter(f => f.topic === activeTopic) : files;
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: "uppercase", fontFamily: F.body }}>Library · {files.length} files</div>
+        <button onClick={() => setAdding(a => !a)} style={{ padding: "5px 12px", background: adding ? T.ndY : "transparent", border: `1px solid ${adding ? T.ndY : T.border}`, borderRadius: 20, color: adding ? T.bg0 : T.txt3, fontSize: 9, cursor: "pointer", fontFamily: F.body, letterSpacing: "1px", textTransform: "uppercase" }}>+ Add File</button>
+      </div>
+      {adding && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "16px 18px", marginBottom: 16, boxShadow: T.shadow }}>
+          <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="File name / title" value={name} onChange={e => setName(e.target.value)} />
+          <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="Topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} />
+          <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="Description (optional)" value={desc} onChange={e => setDesc(e.target.value)} />
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ padding: "6px 12px", background: T.bg2, border: `1px dashed ${T.border}`, borderRadius: 6, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: T.txt2, fontFamily: F.body }}>📎 Attach file <input ref={fileRef} type="file" style={{ display: "none" }} /></label>
+          </div>
+          <div style={{ display: "flex", gap: 7 }}> <button onClick={addFile} style={{ padding: "8px 18px", background: T.btnP, border: "none", borderRadius: 6, color: T.btnPTx, cursor: "pointer", fontSize: 10, fontFamily: F.body, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Save</button> <button onClick={() => setAdding(false)} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt3, cursor: "pointer", fontSize: 10, fontFamily: F.body }}>Cancel</button> </div>
+        </div>
+      )}
+      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>{activeTopic ? `No files for "${activeTopic}" yet.` : "No files in library. Click + Add File to upload PDFs, images, or documents."}</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 10 }}>
+          {filtered.map(f => (
+            <div key={f.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px", boxShadow: T.shadow, position: "relative" }}>
+              <button onClick={() => remove(f.id)} style={{ position: "absolute", top: 6, right: 8, background: "none", border: "none", color: T.txt3, cursor: "pointer", fontSize: 14 }}>×</button>
+              {f.dataUrl && f.type === "image" && <img src={f.dataUrl} alt={f.name} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 4, marginBottom: 8 }} />}
+              {f.dataUrl && f.type === "pdf" && <div style={{ width: "100%", height: 80, background: T.ndR + "20", borderRadius: 4, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>📄</div>}
+              <div style={{ fontSize: 12, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, marginBottom: 4 }}>{f.name}</div>
+              {f.topic && <Pill label={f.topic} T={T} />}
+              {f.description && <div style={{ fontSize: 10, color: T.txt2, fontFamily: F.body, marginTop: 6, fontStyle: "italic" }}>{f.description.slice(0, 120)}</div>}
+              {f.fileName && <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, marginTop: 4 }}>{f.fileName}</div>}
+              <div style={{ fontSize: 8, color: T.txt3, marginTop: 6 }}>{f.date}</div>
+              {f.dataUrl && <a href={f.dataUrl} download={f.fileName || f.name} style={{ display: "inline-block", marginTop: 8, fontSize: 9, color: T.ndY, fontFamily: F.body, textDecoration: "none" }}>↓ Download</a>}
+            </div>
+          ))}
+        </div>}
+    </div>
+  );
+}
 /* ════════════════════════════════════════
 ROOT APP
 ════════════════════════════════════════ */
@@ -1565,6 +1657,7 @@ export default function App() {
             {tab === "maps" && <MapsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "authors" && <AuthorsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "notes" && <NotesScreen T={TH} activeTopic={topic} />}
+            {tab === "library" && <LibraryScreen T={TH} activeTopic={topic} />}
             {tab === "settings" && <SettingsScreen T={TH} />}
           </div>
         </div>
