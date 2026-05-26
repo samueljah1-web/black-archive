@@ -5,6 +5,43 @@ _fl.rel = "stylesheet";
 _fl.href = "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400&family=DM+Sans:wght@300;400;500;600&display=swap";
 document.head.appendChild(_fl);
 const F = { display: "'Cormorant Garamond',serif", body: "'DM Sans',sans-serif" };
+/* ── IndexedDB wrapper for large collections ── */
+const IDB = (() => {
+  const DB_NAME = "black-archive", DB_VER = 1;
+  let _db = null;
+  async function db() {
+    if (_db) return _db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        if (!d.objectStoreNames.contains("collections")) d.createObjectStore("collections");
+        if (!d.objectStoreNames.contains("migrations")) d.createObjectStore("migrations");
+      };
+      req.onsuccess = () => { _db = req.result; resolve(_db); };
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function get(store, key) {
+    const d = await db();
+    return new Promise((resolve, reject) => {
+      const tx = d.transaction(store, "readonly");
+      const req = tx.objectStore(store).get(key);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function set(store, key, value) {
+    const d = await db();
+    return new Promise((resolve, reject) => {
+      const tx = d.transaction(store, "readwrite");
+      const req = tx.objectStore(store).put(value, key);
+      tx.oncomplete = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return { get, set };
+})();
 /* ── THEMES ── */
 const DARK = {
   bg0: "#080706", bg1: "#0f0e0c", bg2: "#161410", bg3: "#1e1b15",
@@ -1453,15 +1490,30 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false); // NEW: Yehuti Assistant state
   // ── Scraped content stores ──
-  const [scrapedBooks, setScrapedBooks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-books") || "[]"); } catch { return []; } });
-  const [scrapedImages, setScrapedImages] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-images") || "[]"); } catch { return []; } });
-  const [scrapedLinks, setScrapedLinks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-links") || "[]"); } catch { return []; } });
-  const [scraping, setScraping] = useState({ books: false, images: false, links: false, all: false });
-  const [scrapeProgress, setScrapeProgress] = useState("");
-  const [scrapeErrors, setScrapeErrors] = useState([]);
-  const saveBooks = useCallback(books => { setScrapedBooks(books); localStorage.setItem("ba9-books", JSON.stringify(books)); }, []);
-  const saveImages = useCallback(images => { setScrapedImages(images); localStorage.setItem("ba9-images", JSON.stringify(images)); }, []);
-  const saveLinks = useCallback(links => { setScrapedLinks(links); localStorage.setItem("ba9-links", JSON.stringify(links)); }, []);
+  const [scrapedBooks, setScrapedBooks] = useState([]);
+  const [scrapedImages, setScrapedImages] = useState([]);
+  const [scrapedLinks, setScrapedLinks] = useState([]);
+  useEffect(() => {
+    (async () => {
+      for (const [key, setter] of [["books", setScrapedBooks], ["images", setScrapedImages], ["links", setScrapedLinks]]) {
+        try {
+          const fromIDB = await IDB.get("collections", `scraped-${key}`);
+          if (fromIDB) { setter(fromIDB); continue; }
+          // Migrate from localStorage
+          const lsKey = `ba9-${key}`;
+          const fromLS = localStorage.getItem(lsKey);
+          if (fromLS) {
+            const parsed = JSON.parse(fromLS);
+            IDB.set("collections", `scraped-${key}`, parsed);
+            setter(parsed);
+          }
+        } catch (e) { /* fall through to localStorage */ }
+      }
+    })();
+  }, []);
+  const saveBooks = useCallback(async (books) => { setScrapedBooks(books); IDB.set("collections", "scraped-books", books); localStorage.setItem("ba9-books", JSON.stringify(books)); }, []);
+  const saveImages = useCallback(async (images) => { setScrapedImages(images); IDB.set("collections", "scraped-images", images); localStorage.setItem("ba9-images", JSON.stringify(images)); }, []);
+  const saveLinks = useCallback(async (links) => { setScrapedLinks(links); IDB.set("collections", "scraped-links", links); localStorage.setItem("ba9-links", JSON.stringify(links)); }, []);
   const doScrapeBooks = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, books: true }));
     setScrapeErrors([]);
