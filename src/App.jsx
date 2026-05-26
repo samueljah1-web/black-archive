@@ -128,12 +128,12 @@ const CURATED_LINKS = [
   { id: "cl8", title: "African Union — Heritage Documents", url: "https://au.int/en/history", domain: "au.int", description: "Pan-African history, treaties, and cultural heritage documents.", category: "Institutional" },
 ];
 const CURATED_VIDEOS = [
-  { id: "v1", title: "Cheikh Anta Diop — African Origin of Civilization", youtubeId: "Dp6INufjLuE", channel: "Pan-African Alliance", description: "Diop's argument that ancient Egypt was a Black African civilisation and the cradle of world culture.", topics: ["Kemetian / Ancient Egypt"], duration: "48 min" },
-  { id: "v2", title: "Ivan Van Sertima — They Came Before Columbus", youtubeId: "u2yL1ywDfS0", channel: "African History", description: "Evidence of African presence in the Americas centuries before Columbus.", topics: ["Indigenous Americas & African Contact"], duration: "55 min" },
-  { id: "v3", title: "John Henrik Clarke — The African World", youtubeId: "SHD9SRjlXo8", channel: "BlackHistory", description: "Clarke's survey of African civilisations across time, deconstructing the colonial narrative.", topics: ["Pan-African Philosophy"], duration: "1 hr 12 min" },
-  { id: "v4", title: "Kongo Cosmology & the Four Moments of the Sun", youtubeId: "6kLHr4jXcgo", channel: "Ancestral Voices", description: "Kongo cosmological thought, the Dikenga dia Kongo, and its survival in the African diaspora.", topics: ["Kongo Cosmology", "Vodou & Diaspora Spirituality"], duration: "38 min" },
-  { id: "v5", title: "Dogon Astronomy — Sirius & African Star Knowledge", youtubeId: "XxX9TbMC0xg", channel: "Afrika Is Waking", description: "The remarkable astronomical knowledge of the Dogon people of Mali.", topics: ["Dogon Astronomy"], duration: "42 min" },
-  { id: "v6", title: "Marimba Ani — Yurugu & European Cultural Thought", youtubeId: "RnNmBdKj2aM", channel: "Decolonial Studies", description: "Ani's landmark analysis of European cultural logic — asili, utamawazo, and utamaroho.", topics: ["African Psychology & Ubuntu"], duration: "1 hr 5 min" },
+  { id: "v1", title: "Cheikh Anta Diop — African Origin of Humanity & Civilization", youtubeId: "D_SSHt74zdQ", channel: "The Dr. Oba T'Shaka Show", description: "Diop discusses the African origin of humanity and civilisation — the foundational argument of Afrocentric scholarship.", topics: ["Kemetian / Ancient Egypt"], duration: "1 hr 4 min" },
+  { id: "v2", title: "Ivan Van Sertima — The Historian Who Rewrote History", youtubeId: "RSRCbh8p7-U", channel: "Historians Connect", description: "Van Sertima's evidence for African presence in the Americas centuries before Columbus.", topics: ["Indigenous Americas & African Contact"], duration: "18 min" },
+  { id: "v3", title: "John Henrik Clarke — East Africa & the Challenge of Arab Nationalism", youtubeId: "rtRe0FTblXs", channel: "TransAtlantic Productions", description: "Clarke's searing analysis of East African history and the forces that shaped it.", topics: ["Pan-African Philosophy"], duration: "1 hr 12 min" },
+  { id: "v4", title: "The Ancient Kongo Cosmology Explained — Dikenga & The Circle of Life", youtubeId: "hUabqjJSh2U", channel: "Brain Drip 33", description: "Kongo cosmological thought and the Dikenga dia Kongo — the four moments of the sun.", topics: ["Kongo Cosmology", "Vodou & Diaspora Spirituality"], duration: "14 min" },
+  { id: "v5", title: "African Tribe's Origin Story in the Stars — Dogon Astronomy", youtubeId: "GX5bZvuD6kE", channel: "HISTORY", description: "The remarkable astronomical knowledge of the Dogon people of Mali — Sirius and beyond.", topics: ["Dogon Astronomy"], duration: "6 min" },
+  { id: "v6", title: "Dr Marimba Ani — Yurugu: The Secrets of Whiteness", youtubeId: "8cMcakFTdOU", channel: "THEE ALFA HOUSE", description: "Ani's landmark critique of European cultural logic — asili, utamawazo, and utamaroho.", topics: ["African Psychology & Ubuntu"], duration: "45 min" },
 ];
 const KEY_AUTHORS = [
   { id: "diop", name: "Cheikh Anta Diop", dates: "1923–1986", origin: "Senegal", field: "Historian, Physicist, Anthropologist", legacy: "Established Africa as the origin of human civilisation and argued for the African roots of ancient Egypt. Father of Afrocentrism.", works: ["Civilization or Barbarism", "The African Origin of Civilization", "Black Africa"], topics: ["Kemetian / Ancient Egypt", "Pan-African Philosophy"] },
@@ -695,10 +695,10 @@ function SettingsScreen({ T }) {
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
   const providers = [
-    { id: "anthropic", name: "Anthropic Claude", models: ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"] },
-    { id: "openai", name: "OpenAI GPT", models: ["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"] },
-    { id: "google", name: "Google Gemini", models: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"] },
-    { id: "mistral", name: "Mistral AI", models: ["mistral-large-latest", "mistral-medium", "mistral-small"] },
+    { id: "anthropic", name: "Anthropic Claude", models: ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"] },
+    { id: "openai", name: "OpenAI", models: ["gpt-4.1", "gpt-4o", "gpt-4.1-mini", "gpt-4-turbo", "o4-mini", "o3"] },
+    { id: "google", name: "Google Gemini", models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"] },
+    { id: "mistral", name: "Mistral AI", models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"] },
   ];
   const currentProvider = providers.find(p => p.id === settings.provider) || providers[0];
   const saveSettings = (newSettings) => {
