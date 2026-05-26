@@ -228,7 +228,7 @@ async function callAI(system, user, provider = null, model = null) {
       transform: (data) => data.choices?.[0]?.message?.content
     },
     google: {
-      url: () => `https://generativelanguage.googleapis.com/v1/models/${finalModel}:generateContent?key=${apiKey}`,
+      url: 'https://generativelanguage.googleapis.com/v1/models/' + finalModel + ':generateContent',
       headers: () => ({ 'Content-Type': 'application/json' }),
       body: () => ({ contents: [{ parts: [{ text: system + '\n\n' + user }] }] }),
       transform: (data) => data.candidates?.[0]?.content?.parts?.[0]?.text
