@@ -5,43 +5,6 @@ _fl.rel = "stylesheet";
 _fl.href = "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400&family=DM+Sans:wght@300;400;500;600&display=swap";
 document.head.appendChild(_fl);
 const F = { display: "'Cormorant Garamond',serif", body: "'DM Sans',sans-serif" };
-/* ── IndexedDB wrapper for large collections ── */
-const IDB = (() => {
-  const DB_NAME = "black-archive", DB_VER = 1;
-  let _db = null;
-  async function db() {
-    if (_db) return _db;
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VER);
-      req.onupgradeneeded = () => {
-        const d = req.result;
-        if (!d.objectStoreNames.contains("collections")) d.createObjectStore("collections");
-        if (!d.objectStoreNames.contains("migrations")) d.createObjectStore("migrations");
-      };
-      req.onsuccess = () => { _db = req.result; resolve(_db); };
-      req.onerror = () => reject(req.error);
-    });
-  }
-  async function get(store, key) {
-    const d = await db();
-    return new Promise((resolve, reject) => {
-      const tx = d.transaction(store, "readonly");
-      const req = tx.objectStore(store).get(key);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  async function set(store, key, value) {
-    const d = await db();
-    return new Promise((resolve, reject) => {
-      const tx = d.transaction(store, "readwrite");
-      const req = tx.objectStore(store).put(value, key);
-      tx.oncomplete = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  }
-  return { get, set };
-})();
 /* ── THEMES ── */
 const DARK = {
   bg0: "#080706", bg1: "#0f0e0c", bg2: "#161410", bg3: "#1e1b15",
@@ -186,7 +149,7 @@ const KEY_AUTHORS = [
 UNIFIED AI HELPER — multi-provider support
 ════════════════════════════════════════ */
 async function callAI(system, user, provider = null, model = null) {
-  const settings = JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514"}');
+  const settings = JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514","apiKeys":{}}');
   const finalProvider = provider || settings.provider;
   const finalModel = model || settings.model;
 
@@ -210,49 +173,48 @@ async function callAI(system, user, provider = null, model = null) {
     console.log('Vercel proxy unavailable, trying direct API…');
   }
 
-  // Fallback: direct API call using user-provided keys (local dev / self-hosted)
+  // Fallback: direct API call using user-provided keys (local dev)
   const apiKey = settings.apiKeys?.[finalProvider];
-  if (!apiKey) return "No API key configured. Add your key in Settings → AI Provider.";
+  if (!apiKey) return "No API key configured. Add your key in Settings.";
 
-  const providerConfigs = {
-    anthropic: {
-      url: 'https://api.anthropic.com/v1/messages',
-      headers: (key) => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }),
-      body: () => ({ model: finalModel, system, messages: [{ role: 'user', content: user }], max_tokens: 1000 }),
-      transform: (data) => data.content?.[0]?.text
-    },
-    openai: {
-      url: 'https://api.openai.com/v1/chat/completions',
-      headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
-      body: () => ({ model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 }),
-      transform: (data) => data.choices?.[0]?.message?.content
-    },
-    google: {
-      url: 'https://generativelanguage.googleapis.com/v1/models/' + finalModel + ':generateContent',
-      headers: () => ({ 'Content-Type': 'application/json' }),
-      body: () => ({ contents: [{ parts: [{ text: system + '\n\n' + user }] }] }),
-      transform: (data) => data.candidates?.[0]?.content?.parts?.[0]?.text
-    },
-    mistral: {
-      url: 'https://api.mistral.ai/v1/chat/completions',
-      headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
-      body: () => ({ model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 }),
-      transform: (data) => data.choices?.[0]?.message?.content
-    }
+  const providerUrls = {
+    anthropic: 'https://api.anthropic.com/v1/messages',
+    openai: 'https://api.openai.com/v1/chat/completions',
+    google: 'https://generativelanguage.googleapis.com/v1/models/' + finalModel + ':generateContent',
+    mistral: 'https://api.mistral.ai/v1/chat/completions'
   };
 
-  const cfg = providerConfigs[finalProvider];
-  if (!cfg) return `Provider "${finalProvider}" not supported for direct API calls.`;
-
   try {
-    const url = typeof cfg.url === 'function' ? cfg.url() : cfg.url;
-    const headers = cfg.headers(apiKey);
-    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(cfg.body()) });
+    let url = providerUrls[finalProvider];
+    let headers = { 'Content-Type': 'application/json' };
+    let body = {};
+
+    if (finalProvider === 'anthropic') {
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+      body = { model: finalModel, system, messages: [{ role: 'user', content: user }], max_tokens: 1000 };
+    } else if (finalProvider === 'openai') {
+      headers['Authorization'] = 'Bearer ' + apiKey;
+      body = { model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 };
+    } else if (finalProvider === 'google') {
+      url = url + '?key=' + apiKey;
+      body = { contents: [{ parts: [{ text: system + '\n\n' + user }] }] };
+    } else if (finalProvider === 'mistral') {
+      headers['Authorization'] = 'Bearer ' + apiKey;
+      body = { model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 };
+    } else {
+      return 'Provider "' + finalProvider + '" not supported for direct API.';
+    }
+
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     const data = await res.json();
-    return cfg.transform(data) || "No response from API.";
+
+    if (finalProvider === 'anthropic') return data.content?.[0]?.text || "No response.";
+    if (finalProvider === 'google') return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+    return data.choices?.[0]?.message?.content || "No response.";
   } catch (e) {
     console.error('Direct AI call failed:', e);
-    return `Connection error: ${e.message || 'Could not reach API'}. Check your key and network.`;
+    return 'Connection error: ' + (e.message || 'Could not reach API') + '. Check your key.';
   }
 }
 /* ════════════════════════════════════════
@@ -341,10 +303,8 @@ async function scrapeBooks(topic, limit = 6) {
 async function scrapeImages(topic, limit = 6) {
   const q = `${TOPIC_KW[topic] || topic} Africa`;
   const results = [];
-  const errors = [];
   try {
     const r1 = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srnamespace=6&srlimit=${limit}&format=json&origin=*`);
-    if (!r1.ok) throw new Error(`Wikimedia returned ${r1.status}`);
     const d1 = await r1.json();
     const titles = (d1.query?.search || []).map(i => i.title);
     if (titles.length) {
@@ -357,32 +317,29 @@ async function scrapeImages(topic, limit = 6) {
         }
       });
     }
-  } catch (e) { errors.push(`Wikimedia: ${e.message}`); }
+  } catch (e) { }
   try {
     const r3 = await fetch(`https://api.europeana.eu/record/v2/search.json?wskey=api2demo&query=${encodeURIComponent(q)}&rows=${limit}&profile=minimal&media=true&thumbnail=true&type=IMAGE`);
-    if (!r3.ok) throw new Error(`Europeana returned ${r3.status}`);
     const d3 = await r3.json();
     (d3.items || []).filter(i => i.edmPreview?.[0] && !i.edmPreview[0].includes(".svg")).forEach(item => {
       results.push({ id: `eu-${item.id?.replace(/\//g, "-")}`, title: Array.isArray(item.title) ? item.title[0] : item.title || "Europeana Item", src: item.edmPreview[0], source: `Europeana`, description: `European cultural heritage collection item related to ${topic}.`, topics: [topic], link: `https://www.europeana.eu/item${item.id}`, valid: true });
     });
-  } catch (e) { errors.push(`Europeana: ${e.message}`); }
-  return { images: results.filter(i => i.src && i.src.startsWith("http")).slice(0, 8), errors };
+  } catch (e) { }
+  return results.filter(i => i.src && i.src.startsWith("http")).slice(0, 8);
 }
 async function scrapeLinks(topic, limit = 5) {
   const results = [];
-  const errors = [];
   try {
     const q = encodeURIComponent(TOPIC_KW[topic] || topic);
     const r = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=${limit}&format=json&origin=*`);
-    if (!r.ok) throw new Error(`Wikipedia returned ${r.status}`);
     const d = await r.json();
     (d.query?.search || []).forEach(item => {
       if (item.title && item.pageid) {
         results.push({ id: `wiki-${item.pageid}`, title: item.title, url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, "_"))}`, domain: "en.wikipedia.org", description: item.snippet?.replace(/<[^>]*>/g, "") || "", category: "Encyclopedia", topic });
       }
     });
-  } catch (e) { errors.push(`Wikipedia: ${e.message}`); }
-  return { links: results.filter(l => l.url && l.title).slice(0, limit), errors };
+  } catch (e) { }
+  return results.filter(l => l.url && l.title).slice(0, limit);
 }
 /* ── Search within scraped/curated content ── */
 function searchLocal(query, { books, images, links, maps, videos }) {
@@ -731,36 +688,9 @@ Keep responses scholarly, warm, and concise. Centre African and diasporal perspe
 /* ════════════════════════════════════════
 SETTINGS SCREEN — AI provider selector
 ════════════════════════════════════════ */
-function KeyInput({ providerId, name, hint, settings, saveSettings, T }) {
-  const [showKey, setShowKey] = useState(false);
-  const key = settings.apiKeys?.[providerId] || "";
-  return (
-    <div style={{ marginBottom: 9 }}>
-      <div style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, marginBottom: 3, display: "flex", justifyContent: "space-between" }}>
-        <span>{name} Key</span>
-        {key && <span style={{ color: T.ok, fontSize: 8 }}>{showKey ? "visible" : "••••"}</span>}
-      </div>
-      <div style={{ display: "flex", gap: 4 }}>
-        <input
-          type={showKey ? "text" : "password"}
-          value={key}
-          onChange={e => {
-            const newKeys = { ...settings.apiKeys, [providerId]: e.target.value };
-            saveSettings({ apiKeys: newKeys });
-          }}
-          placeholder={hint}
-          style={{ flex: 1, padding: "7px 10px", background: T.bg1, border: `1px solid ${T.border}`, borderRadius: 5, color: T.txt0, fontSize: 11, fontFamily: "monospace", outline: "none" }}
-        />
-        <button onClick={() => setShowKey(s => !s)} style={{ padding: "5px 8px", background: "none", border: `1px solid ${T.border}`, borderRadius: 5, color: T.txt3, cursor: "pointer", fontSize: 11, fontFamily: F.body }}>
-          {showKey ? "🙈" : "👁"}
-        </button>
-      </div>
-    </div>
-  );
-}
 function SettingsScreen({ T }) {
   const [settings, setSettings] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514","apiKeys":{}}'); } catch { return { provider: "anthropic", model: "claude-sonnet-4-20250514", apiKeys: {} }; }
+    try { return JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514"}'); } catch { return { provider: "anthropic", model: "claude-sonnet-4-20250514" }; }
   });
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -804,15 +734,12 @@ function SettingsScreen({ T }) {
           </select>
         </div>
         <div style={{ background: T.bg2, border: `1px dashed ${T.border}`, borderRadius: 8, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: T.txt3, fontFamily: F.body, marginBottom: 10 }}>🔐 Your API Keys (stored locally in your browser only):</div>
-          {[{ id: "anthropic", name: "Anthropic", hint: "sk-ant-..." },
-            { id: "openai", name: "OpenAI", hint: "sk-..." },
-            { id: "google", name: "Google Gemini", hint: "AIza..." },
-            { id: "mistral", name: "Mistral", hint: "..." }].map(p => (
-            <KeyInput key={p.id} providerId={p.id} name={p.name} hint={p.hint} settings={settings} saveSettings={saveSettings} T={T} />
-          ))}
-          <div style={{ fontSize: 8, color: T.txt3, fontFamily: F.body, marginTop: 10, lineHeight: 1.5 }}>
-            Keys are only used for the direct API fallback. On Vercel, the serverless proxy handles API calls and your keys stay on the server. Leave keys empty if deploying to Vercel with environment variables set.
+          <div style={{ fontSize: 10, color: T.txt3, fontFamily: F.body, marginBottom: 8 }}>🔐 API Keys are stored securely in Vercel environment variables:</div>
+          <div style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, lineHeight: 1.6 }}>
+            • ANTHROPIC_API_KEY<br />
+            • OPENAI_API_KEY<br />
+            • GEMINI_API_KEY<br />
+            • MISTRAL_API_KEY
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -832,7 +759,7 @@ function SettingsScreen({ T }) {
 SCREENS — FULLY RESTORED FROM v9
 ════════════════════════════════════════ */
 /* ── Universal Search Results ── */
-function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedImages, scrapedLinks, onScrapeAll, scraping, scrapeProgress, scrapeErrors }) {
+function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedImages, scrapedLinks, onScrapeAll, scraping, scrapeProgress }) {
   const [aiResults, setAiResults] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const prevQuery = useRef("");
@@ -875,13 +802,6 @@ function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedI
             <div style={{ height: 5, background: T.bg3, borderRadius: 3, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${Math.min(100, Math.round((scrapedBooks.length / 160) * 100))}%`, background: T.btnP, borderRadius: 3, transition: "width 0.4s ease" }} />
             </div>
-            {scrapeErrors?.length > 0 && (
-              <div style={{ marginTop: 10, padding: "8px 12px", background: `${T.ndR}12`, border: `1px solid ${T.ndR}40`, borderRadius: 6 }}>
-                <div style={{ fontSize: 9, color: T.err, fontFamily: F.body, fontWeight: 600, marginBottom: 4 }}>⚠ Some sources failed:</div>
-                {scrapeErrors.slice(0, 5).map((e, i) => <div key={i} style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, lineHeight: 1.5 }}>{e}</div>)}
-                {scrapeErrors.length > 5 && <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body }}>…and {scrapeErrors.length - 5} more</div>}
-              </div>
-            )}
           </div>
         )}
         <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
@@ -1490,90 +1410,61 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false); // NEW: Yehuti Assistant state
   // ── Scraped content stores ──
-  const [scrapedBooks, setScrapedBooks] = useState([]);
-  const [scrapedImages, setScrapedImages] = useState([]);
-  const [scrapedLinks, setScrapedLinks] = useState([]);
-  useEffect(() => {
-    (async () => {
-      for (const [key, setter] of [["books", setScrapedBooks], ["images", setScrapedImages], ["links", setScrapedLinks]]) {
-        try {
-          const fromIDB = await IDB.get("collections", `scraped-${key}`);
-          if (fromIDB) { setter(fromIDB); continue; }
-          // Migrate from localStorage
-          const lsKey = `ba9-${key}`;
-          const fromLS = localStorage.getItem(lsKey);
-          if (fromLS) {
-            const parsed = JSON.parse(fromLS);
-            IDB.set("collections", `scraped-${key}`, parsed);
-            setter(parsed);
-          }
-        } catch (e) { /* fall through to localStorage */ }
-      }
-    })();
-  }, []);
-  const saveBooks = useCallback(async (books) => { setScrapedBooks(books); IDB.set("collections", "scraped-books", books); localStorage.setItem("ba9-books", JSON.stringify(books)); }, []);
-  const saveImages = useCallback(async (images) => { setScrapedImages(images); IDB.set("collections", "scraped-images", images); localStorage.setItem("ba9-images", JSON.stringify(images)); }, []);
-  const saveLinks = useCallback(async (links) => { setScrapedLinks(links); IDB.set("collections", "scraped-links", links); localStorage.setItem("ba9-links", JSON.stringify(links)); }, []);
+  const [scrapedBooks, setScrapedBooks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-books") || "[]"); } catch { return []; } });
+  const [scrapedImages, setScrapedImages] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-images") || "[]"); } catch { return []; } });
+  const [scrapedLinks, setScrapedLinks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-links") || "[]"); } catch { return []; } });
+  const [scraping, setScraping] = useState({ books: false, images: false, links: false, all: false });
+  const [scrapeProgress, setScrapeProgress] = useState("");
+  const saveBooks = useCallback(books => { setScrapedBooks(books); localStorage.setItem("ba9-books", JSON.stringify(books)); }, []);
+  const saveImages = useCallback(images => { setScrapedImages(images); localStorage.setItem("ba9-images", JSON.stringify(images)); }, []);
+  const saveLinks = useCallback(links => { setScrapedLinks(links); localStorage.setItem("ba9-links", JSON.stringify(links)); }, []);
   const doScrapeBooks = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, books: true }));
-    setScrapeErrors([]);
     const topics = topicFilter ? [topicFilter] : TOPICS;
     const results = [];
-    const allErrors = [];
     for (const t of topics) {
       setScrapeProgress(`Books: ${t}…`);
-      const { books, errors } = await scrapeBooks(t, 5);
+      const books = await scrapeBooks(t, 5);
       books.forEach(b => results.push({ ...b, _topic: t }));
-      errors.forEach(e => allErrors.push(`[${t}] ${e}`));
       await new Promise(r => setTimeout(r, 200));
     }
     const deduped = results.filter((b, i, arr) => arr.findIndex(x => x.id === b.id) === i);
     saveBooks(topicFilter ? [...scrapedBooks.filter(b => b._topic !== topicFilter), ...deduped] : deduped);
-    setScrapeErrors(allErrors);
     setScraping(s => ({ ...s, books: false }));
-    setScrapeProgress(deduped.length > 0 ? `Books done! ${deduped.length} found` : "Books done — no results found");
+    setScrapeProgress("Books done!");
   }, [scrapedBooks, saveBooks]);
   const doScrapeImages = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, images: true }));
-    setScrapeErrors([]);
     const topics = topicFilter ? [topicFilter] : TOPICS;
     const results = [];
-    const allErrors = [];
     for (const t of topics) {
       setScrapeProgress(`Images: ${t}…`);
-      const { images, errors } = await scrapeImages(t, 4);
-      images.forEach(i => results.push({ ...i, topics: [t] }));
-      errors.forEach(e => allErrors.push(`[${t}] ${e}`));
+      const imgs = await scrapeImages(t, 4);
+      imgs.forEach(i => results.push({ ...i, topics: [t] }));
       await new Promise(r => setTimeout(r, 300));
     }
     const deduped = results.filter((i, idx, arr) => arr.findIndex(x => x.id === i.id) === idx && i.src);
     saveImages(topicFilter ? [...scrapedImages.filter(i => !i.topics?.includes(topicFilter)), ...deduped] : deduped);
-    setScrapeErrors(allErrors);
     setScraping(s => ({ ...s, images: false }));
-    setScrapeProgress(deduped.length > 0 ? `Images done! ${deduped.length} found` : "Images done — no results found");
+    setScrapeProgress("Images done!");
   }, [scrapedImages, saveImages]);
   const doScrapeLinks = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, links: true }));
-    setScrapeErrors([]);
     const topics = topicFilter ? [topicFilter] : TOPICS;
     const results = [];
-    const allErrors = [];
     for (const t of topics) {
       setScrapeProgress(`Links: ${t}…`);
-      const { links, errors } = await scrapeLinks(t, 4);
+      const links = await scrapeLinks(t, 4);
       links.forEach(l => results.push({ ...l, _topic: t }));
-      errors.forEach(e => allErrors.push(`[${t}] ${e}`));
       await new Promise(r => setTimeout(r, 200));
     }
     const deduped = results.filter((l, i, arr) => arr.findIndex(x => x.id === l.id) === i && l.url);
     saveLinks(topicFilter ? [...scrapedLinks.filter(l => l._topic !== topicFilter), ...deduped] : deduped);
-    setScrapeErrors(allErrors);
     setScraping(s => ({ ...s, links: false }));
-    setScrapeProgress(deduped.length > 0 ? `Links done! ${deduped.length} found` : "Links done — no results found");
+    setScrapeProgress("Links done!");
   }, [scrapedLinks, saveLinks]);
   const doScrapeAll = useCallback(async () => {
     setScraping(s => ({ ...s, all: true }));
-    setScrapeErrors([]);
     await doScrapeBooks(null);
     await doScrapeImages(null);
     await doScrapeLinks(null);
@@ -1665,7 +1556,7 @@ export default function App() {
             </div>
           )}
           <div style={{ padding: "22px 28px 80px" }}>
-            {tab === "all" && <AllScreen T={TH} globalQuery={globalQuery} activeTopic={topic} setTab={setTab} scrapedBooks={scrapedBooks} scrapedImages={scrapedImages} scrapedLinks={scrapedLinks} onScrapeAll={doScrapeAll} scraping={anyScraping} scrapeProgress={scrapeProgress} scrapeErrors={scrapeErrors} />}
+            {tab === "all" && <AllScreen T={TH} globalQuery={globalQuery} activeTopic={topic} setTab={setTab} scrapedBooks={scrapedBooks} scrapedImages={scrapedImages} scrapedLinks={scrapedLinks} onScrapeAll={doScrapeAll} scraping={anyScraping} scrapeProgress={scrapeProgress} />}
             {tab === "deepdive" && <DeepDiveScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "books" && <BooksScreen T={TH} activeTopic={topic} globalQuery={globalQuery} scrapedBooks={scrapedBooks} onScrapeBooks={doScrapeBooks} scraping={scraping.books} />}
             {tab === "videos" && <VideosScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
