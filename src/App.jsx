@@ -238,21 +238,28 @@ SCRAPING ENGINE — per content type
 ════════════════════════════════════════ */
 async function scrapeBooks(topic, limit = 6) {
   const q = TOPIC_KW[topic] || topic;
+  const errors = [];
   const [ia, ol] = await Promise.allSettled([
     fetch(`https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}+AND+mediatype:texts&fl=identifier,title,creator,description,date&rows=${limit}&output=json&sort=downloads+desc`)
-      .then(r => r.json()).then(d => (d.response?.docs || []).filter(b => b.identifier && b.title).map(b => ({ id: `ia-${b.identifier}`, title: b.title, author: Array.isArray(b.creator) ? b.creator[0] : b.creator || "Unknown", year: b.date?.slice(0, 4) || "—", description: String(b.description || "").slice(0, 200), subjects: [], iaId: b.identifier, coverId: null, editions: 1, source: "Internet Archive", readUrl: `https://archive.org/details/${b.identifier}`, downloadUrl: `https://archive.org/download/${b.identifier}/${b.identifier}.pdf` }))),
+      .then(r => { if (!r.ok) throw new Error(`IA returned ${r.status}`); return r.json(); })
+      .then(d => (d.response?.docs || []).filter(b => b.identifier && b.title).map(b => ({ id: `ia-${b.identifier}`, title: b.title, author: Array.isArray(b.creator) ? b.creator[0] : b.creator || "Unknown", year: b.date?.slice(0, 4) || "—", description: String(b.description || "").slice(0, 200), subjects: [], iaId: b.identifier, coverId: null, editions: 1, source: "Internet Archive", readUrl: `https://archive.org/details/${b.identifier}`, downloadUrl: `https://archive.org/download/${b.identifier}/${b.identifier}.pdf` })))
+      .catch(e => { errors.push(`Internet Archive: ${e.message}`); return []; }),
     fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&limit=${limit}&fields=key,title,author_name,first_publish_year,subject,ia,cover_i,edition_count`)
-      .then(r => r.json()).then(d => (d.docs || []).filter(b => b.title).map(b => ({ id: b.key, title: b.title, author: (b.author_name || []).join(", ") || "Unknown", year: b.first_publish_year || "—", subjects: (b.subject || []).slice(0, 3), iaId: b.ia?.[0] || null, coverId: b.cover_i || null, editions: b.edition_count || 1, source: "Open Library", readUrl: b.ia?.[0] ? `https://archive.org/details/${b.ia[0]}` : `https://openlibrary.org${b.key}`, downloadUrl: b.ia?.[0] ? `https://archive.org/download/${b.ia[0]}/${b.ia[0]}.pdf` : null }))),
+      .then(r => { if (!r.ok) throw new Error(`OpenLibrary returned ${r.status}`); return r.json(); })
+      .then(d => (d.docs || []).filter(b => b.title).map(b => ({ id: b.key, title: b.title, author: (b.author_name || []).join(", ") || "Unknown", year: b.first_publish_year || "—", subjects: (b.subject || []).slice(0, 3), iaId: b.ia?.[0] || null, coverId: b.cover_i || null, editions: b.edition_count || 1, source: "Open Library", readUrl: b.ia?.[0] ? `https://archive.org/details/${b.ia[0]}` : `https://openlibrary.org${b.key}`, downloadUrl: b.ia?.[0] ? `https://archive.org/download/${b.ia[0]}/${b.ia[0]}.pdf` : null })))
+      .catch(e => { errors.push(`OpenLibrary: ${e.message}`); return []; }),
   ]);
   const iaBooks = ia.status === "fulfilled" ? ia.value : [];
   const olBooks = ol.status === "fulfilled" ? ol.value : [];
-  return [...iaBooks, ...olBooks].slice(0, 8);
+  return { books: [...iaBooks, ...olBooks].slice(0, 8), errors };
 }
 async function scrapeImages(topic, limit = 6) {
   const q = `${TOPIC_KW[topic] || topic} Africa`;
   const results = [];
+  const errors = [];
   try {
     const r1 = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srnamespace=6&srlimit=${limit}&format=json&origin=*`);
+    if (!r1.ok) throw new Error(`Wikimedia returned ${r1.status}`);
     const d1 = await r1.json();
     const titles = (d1.query?.search || []).map(i => i.title);
     if (titles.length) {
@@ -265,29 +272,32 @@ async function scrapeImages(topic, limit = 6) {
         }
       });
     }
-  } catch (e) { }
+  } catch (e) { errors.push(`Wikimedia: ${e.message}`); }
   try {
     const r3 = await fetch(`https://api.europeana.eu/record/v2/search.json?wskey=api2demo&query=${encodeURIComponent(q)}&rows=${limit}&profile=minimal&media=true&thumbnail=true&type=IMAGE`);
+    if (!r3.ok) throw new Error(`Europeana returned ${r3.status}`);
     const d3 = await r3.json();
     (d3.items || []).filter(i => i.edmPreview?.[0] && !i.edmPreview[0].includes(".svg")).forEach(item => {
       results.push({ id: `eu-${item.id?.replace(/\//g, "-")}`, title: Array.isArray(item.title) ? item.title[0] : item.title || "Europeana Item", src: item.edmPreview[0], source: `Europeana`, description: `European cultural heritage collection item related to ${topic}.`, topics: [topic], link: `https://www.europeana.eu/item${item.id}`, valid: true });
     });
-  } catch (e) { }
-  return results.filter(i => i.src && i.src.startsWith("http")).slice(0, 8);
+  } catch (e) { errors.push(`Europeana: ${e.message}`); }
+  return { images: results.filter(i => i.src && i.src.startsWith("http")).slice(0, 8), errors };
 }
 async function scrapeLinks(topic, limit = 5) {
   const results = [];
+  const errors = [];
   try {
     const q = encodeURIComponent(TOPIC_KW[topic] || topic);
     const r = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=${limit}&format=json&origin=*`);
+    if (!r.ok) throw new Error(`Wikipedia returned ${r.status}`);
     const d = await r.json();
     (d.query?.search || []).forEach(item => {
       if (item.title && item.pageid) {
         results.push({ id: `wiki-${item.pageid}`, title: item.title, url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, "_"))}`, domain: "en.wikipedia.org", description: item.snippet?.replace(/<[^>]*>/g, "") || "", category: "Encyclopedia", topic });
       }
     });
-  } catch (e) { }
-  return results.filter(l => l.url && l.title).slice(0, limit);
+  } catch (e) { errors.push(`Wikipedia: ${e.message}`); }
+  return { links: results.filter(l => l.url && l.title).slice(0, limit), errors };
 }
 /* ── Search within scraped/curated content ── */
 function searchLocal(query, { books, images, links, maps, videos }) {
@@ -707,7 +717,7 @@ function SettingsScreen({ T }) {
 SCREENS — FULLY RESTORED FROM v9
 ════════════════════════════════════════ */
 /* ── Universal Search Results ── */
-function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedImages, scrapedLinks, onScrapeAll, scraping, scrapeProgress }) {
+function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedImages, scrapedLinks, onScrapeAll, scraping, scrapeProgress, scrapeErrors }) {
   const [aiResults, setAiResults] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const prevQuery = useRef("");
@@ -750,6 +760,13 @@ function AllScreen({ T, globalQuery, activeTopic, setTab, scrapedBooks, scrapedI
             <div style={{ height: 5, background: T.bg3, borderRadius: 3, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${Math.min(100, Math.round((scrapedBooks.length / 160) * 100))}%`, background: T.btnP, borderRadius: 3, transition: "width 0.4s ease" }} />
             </div>
+            {scrapeErrors?.length > 0 && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: `${T.ndR}12`, border: `1px solid ${T.ndR}40`, borderRadius: 6 }}>
+                <div style={{ fontSize: 9, color: T.err, fontFamily: F.body, fontWeight: 600, marginBottom: 4 }}>⚠ Some sources failed:</div>
+                {scrapeErrors.slice(0, 5).map((e, i) => <div key={i} style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, lineHeight: 1.5 }}>{e}</div>)}
+                {scrapeErrors.length > 5 && <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body }}>…and {scrapeErrors.length - 5} more</div>}
+              </div>
+            )}
           </div>
         )}
         <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
@@ -1363,56 +1380,70 @@ export default function App() {
   const [scrapedLinks, setScrapedLinks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-links") || "[]"); } catch { return []; } });
   const [scraping, setScraping] = useState({ books: false, images: false, links: false, all: false });
   const [scrapeProgress, setScrapeProgress] = useState("");
+  const [scrapeErrors, setScrapeErrors] = useState([]);
   const saveBooks = useCallback(books => { setScrapedBooks(books); localStorage.setItem("ba9-books", JSON.stringify(books)); }, []);
   const saveImages = useCallback(images => { setScrapedImages(images); localStorage.setItem("ba9-images", JSON.stringify(images)); }, []);
   const saveLinks = useCallback(links => { setScrapedLinks(links); localStorage.setItem("ba9-links", JSON.stringify(links)); }, []);
   const doScrapeBooks = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, books: true }));
+    setScrapeErrors([]);
     const topics = topicFilter ? [topicFilter] : TOPICS;
     const results = [];
+    const allErrors = [];
     for (const t of topics) {
       setScrapeProgress(`Books: ${t}…`);
-      const books = await scrapeBooks(t, 5);
+      const { books, errors } = await scrapeBooks(t, 5);
       books.forEach(b => results.push({ ...b, _topic: t }));
+      errors.forEach(e => allErrors.push(`[${t}] ${e}`));
       await new Promise(r => setTimeout(r, 200));
     }
     const deduped = results.filter((b, i, arr) => arr.findIndex(x => x.id === b.id) === i);
     saveBooks(topicFilter ? [...scrapedBooks.filter(b => b._topic !== topicFilter), ...deduped] : deduped);
+    setScrapeErrors(allErrors);
     setScraping(s => ({ ...s, books: false }));
-    setScrapeProgress("Books done!");
+    setScrapeProgress(deduped.length > 0 ? `Books done! ${deduped.length} found` : "Books done — no results found");
   }, [scrapedBooks, saveBooks]);
   const doScrapeImages = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, images: true }));
+    setScrapeErrors([]);
     const topics = topicFilter ? [topicFilter] : TOPICS;
     const results = [];
+    const allErrors = [];
     for (const t of topics) {
       setScrapeProgress(`Images: ${t}…`);
-      const imgs = await scrapeImages(t, 4);
-      imgs.forEach(i => results.push({ ...i, topics: [t] }));
+      const { images, errors } = await scrapeImages(t, 4);
+      images.forEach(i => results.push({ ...i, topics: [t] }));
+      errors.forEach(e => allErrors.push(`[${t}] ${e}`));
       await new Promise(r => setTimeout(r, 300));
     }
     const deduped = results.filter((i, idx, arr) => arr.findIndex(x => x.id === i.id) === idx && i.src);
     saveImages(topicFilter ? [...scrapedImages.filter(i => !i.topics?.includes(topicFilter)), ...deduped] : deduped);
+    setScrapeErrors(allErrors);
     setScraping(s => ({ ...s, images: false }));
-    setScrapeProgress("Images done!");
+    setScrapeProgress(deduped.length > 0 ? `Images done! ${deduped.length} found` : "Images done — no results found");
   }, [scrapedImages, saveImages]);
   const doScrapeLinks = useCallback(async (topicFilter) => {
     setScraping(s => ({ ...s, links: true }));
+    setScrapeErrors([]);
     const topics = topicFilter ? [topicFilter] : TOPICS;
     const results = [];
+    const allErrors = [];
     for (const t of topics) {
       setScrapeProgress(`Links: ${t}…`);
-      const links = await scrapeLinks(t, 4);
+      const { links, errors } = await scrapeLinks(t, 4);
       links.forEach(l => results.push({ ...l, _topic: t }));
+      errors.forEach(e => allErrors.push(`[${t}] ${e}`));
       await new Promise(r => setTimeout(r, 200));
     }
     const deduped = results.filter((l, i, arr) => arr.findIndex(x => x.id === l.id) === i && l.url);
     saveLinks(topicFilter ? [...scrapedLinks.filter(l => l._topic !== topicFilter), ...deduped] : deduped);
+    setScrapeErrors(allErrors);
     setScraping(s => ({ ...s, links: false }));
-    setScrapeProgress("Links done!");
+    setScrapeProgress(deduped.length > 0 ? `Links done! ${deduped.length} found` : "Links done — no results found");
   }, [scrapedLinks, saveLinks]);
   const doScrapeAll = useCallback(async () => {
     setScraping(s => ({ ...s, all: true }));
+    setScrapeErrors([]);
     await doScrapeBooks(null);
     await doScrapeImages(null);
     await doScrapeLinks(null);
@@ -1504,7 +1535,7 @@ export default function App() {
             </div>
           )}
           <div style={{ padding: "22px 28px 80px" }}>
-            {tab === "all" && <AllScreen T={TH} globalQuery={globalQuery} activeTopic={topic} setTab={setTab} scrapedBooks={scrapedBooks} scrapedImages={scrapedImages} scrapedLinks={scrapedLinks} onScrapeAll={doScrapeAll} scraping={anyScraping} scrapeProgress={scrapeProgress} />}
+            {tab === "all" && <AllScreen T={TH} globalQuery={globalQuery} activeTopic={topic} setTab={setTab} scrapedBooks={scrapedBooks} scrapedImages={scrapedImages} scrapedLinks={scrapedLinks} onScrapeAll={doScrapeAll} scraping={anyScraping} scrapeProgress={scrapeProgress} scrapeErrors={scrapeErrors} />}
             {tab === "deepdive" && <DeepDiveScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "books" && <BooksScreen T={TH} activeTopic={topic} globalQuery={globalQuery} scrapedBooks={scrapedBooks} onScrapeBooks={doScrapeBooks} scraping={scraping.books} />}
             {tab === "videos" && <VideosScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
