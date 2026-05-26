@@ -152,6 +152,8 @@ async function callAI(system, user, provider = null, model = null) {
   const settings = JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514"}');
   const finalProvider = provider || settings.provider;
   const finalModel = model || settings.model;
+
+  // Try Vercel serverless proxy first
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
@@ -163,11 +165,57 @@ async function callAI(system, user, provider = null, model = null) {
         system: system
       })
     });
-    const data = await res.json();
-    return data.text || "No response.";
+    if (res.ok) {
+      const data = await res.json();
+      if (data.text) return data.text;
+    }
   } catch (e) {
-    console.error('AI call failed:', e);
-    return "Connection error. Check your API settings.";
+    console.log('Vercel proxy unavailable, trying direct API…');
+  }
+
+  // Fallback: direct API call using user-provided keys (local dev / self-hosted)
+  const apiKey = settings.apiKeys?.[finalProvider];
+  if (!apiKey) return "No API key configured. Add your key in Settings → AI Provider.";
+
+  const providerConfigs = {
+    anthropic: {
+      url: 'https://api.anthropic.com/v1/messages',
+      headers: (key) => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }),
+      body: () => ({ model: finalModel, system, messages: [{ role: 'user', content: user }], max_tokens: 1000 }),
+      transform: (data) => data.content?.[0]?.text
+    },
+    openai: {
+      url: 'https://api.openai.com/v1/chat/completions',
+      headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
+      body: () => ({ model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 }),
+      transform: (data) => data.choices?.[0]?.message?.content
+    },
+    google: {
+      url: () => `https://generativelanguage.googleapis.com/v1/models/${finalModel}:generateContent?key=${apiKey}`,
+      headers: () => ({ 'Content-Type': 'application/json' }),
+      body: () => ({ contents: [{ parts: [{ text: system + '\n\n' + user }] }] }),
+      transform: (data) => data.candidates?.[0]?.content?.parts?.[0]?.text
+    },
+    mistral: {
+      url: 'https://api.mistral.ai/v1/chat/completions',
+      headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }),
+      body: () => ({ model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 }),
+      transform: (data) => data.choices?.[0]?.message?.content
+    }
+  };
+
+  const cfg = providerConfigs[finalProvider];
+  if (!cfg) return `Provider "${finalProvider}" not supported for direct API calls.`;
+
+  try {
+    const url = typeof cfg.url === 'function' ? cfg.url() : cfg.url;
+    const headers = cfg.headers(apiKey);
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(cfg.body()) });
+    const data = await res.json();
+    return cfg.transform(data) || "No response from API.";
+  } catch (e) {
+    console.error('Direct AI call failed:', e);
+    return `Connection error: ${e.message || 'Could not reach API'}. Check your key and network.`;
   }
 }
 /* ════════════════════════════════════════
@@ -646,9 +694,36 @@ Keep responses scholarly, warm, and concise. Centre African and diasporal perspe
 /* ════════════════════════════════════════
 SETTINGS SCREEN — AI provider selector
 ════════════════════════════════════════ */
+function KeyInput({ providerId, name, hint, settings, saveSettings, T }) {
+  const [showKey, setShowKey] = useState(false);
+  const key = settings.apiKeys?.[providerId] || "";
+  return (
+    <div style={{ marginBottom: 9 }}>
+      <div style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, marginBottom: 3, display: "flex", justifyContent: "space-between" }}>
+        <span>{name} Key</span>
+        {key && <span style={{ color: T.ok, fontSize: 8 }}>{showKey ? "visible" : "••••"}</span>}
+      </div>
+      <div style={{ display: "flex", gap: 4 }}>
+        <input
+          type={showKey ? "text" : "password"}
+          value={key}
+          onChange={e => {
+            const newKeys = { ...settings.apiKeys, [providerId]: e.target.value };
+            saveSettings({ apiKeys: newKeys });
+          }}
+          placeholder={hint}
+          style={{ flex: 1, padding: "7px 10px", background: T.bg1, border: `1px solid ${T.border}`, borderRadius: 5, color: T.txt0, fontSize: 11, fontFamily: "monospace", outline: "none" }}
+        />
+        <button onClick={() => setShowKey(s => !s)} style={{ padding: "5px 8px", background: "none", border: `1px solid ${T.border}`, borderRadius: 5, color: T.txt3, cursor: "pointer", fontSize: 11, fontFamily: F.body }}>
+          {showKey ? "🙈" : "👁"}
+        </button>
+      </div>
+    </div>
+  );
+}
 function SettingsScreen({ T }) {
   const [settings, setSettings] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514"}'); } catch { return { provider: "anthropic", model: "claude-sonnet-4-20250514" }; }
+    try { return JSON.parse(localStorage.getItem('ai-settings') || '{"provider":"anthropic","model":"claude-sonnet-4-20250514","apiKeys":{}}'); } catch { return { provider: "anthropic", model: "claude-sonnet-4-20250514", apiKeys: {} }; }
   });
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -692,12 +767,15 @@ function SettingsScreen({ T }) {
           </select>
         </div>
         <div style={{ background: T.bg2, border: `1px dashed ${T.border}`, borderRadius: 8, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: T.txt3, fontFamily: F.body, marginBottom: 8 }}>🔐 API Keys are stored securely in Vercel environment variables:</div>
-          <div style={{ fontSize: 9, color: T.txt2, fontFamily: F.body, lineHeight: 1.6 }}>
-            • ANTHROPIC_API_KEY<br />
-            • OPENAI_API_KEY<br />
-            • GEMINI_API_KEY<br />
-            • MISTRAL_API_KEY
+          <div style={{ fontSize: 10, color: T.txt3, fontFamily: F.body, marginBottom: 10 }}>🔐 Your API Keys (stored locally in your browser only):</div>
+          {[{ id: "anthropic", name: "Anthropic", hint: "sk-ant-..." },
+            { id: "openai", name: "OpenAI", hint: "sk-..." },
+            { id: "google", name: "Google Gemini", hint: "AIza..." },
+            { id: "mistral", name: "Mistral", hint: "..." }].map(p => (
+            <KeyInput key={p.id} providerId={p.id} name={p.name} hint={p.hint} settings={settings} saveSettings={saveSettings} T={T} />
+          ))}
+          <div style={{ fontSize: 8, color: T.txt3, fontFamily: F.body, marginTop: 10, lineHeight: 1.5 }}>
+            Keys are only used for the direct API fallback. On Vercel, the serverless proxy handles API calls and your keys stay on the server. Leave keys empty if deploying to Vercel with environment variables set.
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
