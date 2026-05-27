@@ -1493,7 +1493,7 @@ export default function App() {
       const localBooks = LIBRARY_BOOKS.map(b => ({
         ...b,
         _topic: b.topics?.[0] || "",
-        description: b.description || "Local PDF — " + (b.filename || ""),
+        description: b.topics?.length ? `Topics: ${b.topics.join(", ")}` : "",
         source: "Local Library",
         readUrl: isLocal && b.filename ? `/library/${b.filename}` : "",
         downloadUrl: "",
