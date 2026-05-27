@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { LIBRARY_BOOKS, LIBRARY_LINKS, LIBRARY_MAPS } from "./libraryPdfs.js";
 /* ── FONTS ── */
 const _fl = document.createElement("link");
 _fl.rel = "stylesheet";
@@ -181,7 +182,8 @@ async function callAI(system, user, provider = null, model = null) {
     anthropic: 'https://api.anthropic.com/v1/messages',
     openai: 'https://api.openai.com/v1/chat/completions',
     google: 'https://generativelanguage.googleapis.com/v1/models/' + finalModel + ':generateContent',
-    mistral: 'https://api.mistral.ai/v1/chat/completions'
+    mistral: 'https://api.mistral.ai/v1/chat/completions',
+    deepseek: 'https://api.deepseek.com/chat/completions'
   };
 
   try {
@@ -200,6 +202,9 @@ async function callAI(system, user, provider = null, model = null) {
       url = url + '?key=' + apiKey;
       body = { contents: [{ parts: [{ text: system + '\n\n' + user }] }] };
     } else if (finalProvider === 'mistral') {
+      headers['Authorization'] = 'Bearer ' + apiKey;
+      body = { model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 };
+    } else if (finalProvider === 'deepseek') {
       headers['Authorization'] = 'Bearer ' + apiKey;
       body = { model: finalModel, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000 };
     } else {
@@ -542,7 +547,6 @@ const NAV_ITEMS = [
   { id: "maps", icon: "🗺", label: "Maps" },
   { id: "authors", icon: "✦", label: "Authors" },
   { id: "notes", icon: "✍", label: "Notes" },
-  { id: "library", icon: "📁", label: "Library" },
   { id: "settings", icon: "⚙", label: "Settings" },
 ];
 function Sidebar({ T, tab, setTab, topic, setTopic, dark, setDark, collapsed, setCollapsed }) {
@@ -729,6 +733,7 @@ function SettingsScreen({ T }) {
     { id: "openai", name: "OpenAI", models: ["gpt-4.1", "gpt-4o", "gpt-4.1-mini", "gpt-4-turbo", "o4-mini", "o3"] },
     { id: "google", name: "Google Gemini", models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"] },
     { id: "mistral", name: "Mistral AI", models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"] },
+    { id: "deepseek", name: "DeepSeek", models: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro"] },
   ];
   const currentProvider = providers.find(p => p.id === settings.provider) || providers[0];
   const saveSettings = (newSettings) => {
@@ -769,6 +774,7 @@ function SettingsScreen({ T }) {
           <KeyInput providerId="openai" name="OpenAI" hint="sk-..." settings={settings} saveSettings={saveSettings} T={T} />
           <KeyInput providerId="google" name="Google Gemini" hint="AIza..." settings={settings} saveSettings={saveSettings} T={T} />
           <KeyInput providerId="mistral" name="Mistral" hint="..." settings={settings} saveSettings={saveSettings} T={T} />
+          <KeyInput providerId="deepseek" name="DeepSeek" hint="sk-..." settings={settings} saveSettings={saveSettings} T={T} />
           <div style={{ fontSize: 8, color: T.txt3, fontFamily: F.body, marginTop: 10, lineHeight: 1.5 }}>
             Keys used for direct API fallback. On Vercel, the proxy handles calls so keys stay on the server. Leave empty if deploying with Vercel env vars.
           </div>
@@ -1428,70 +1434,7 @@ function NotesScreen({ T, activeTopic }) {
     </div>
   );
 }
-/* ── LibraryScreen ── */
-function LibraryScreen({ T, activeTopic }) {
-  const KEY = "ba-library-v1";
-  const [files, setFiles] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState(""); const [topic, setTopic] = useState(activeTopic || ""); const [desc, setDesc] = useState("");
-  const fileRef = useRef(null);
-  useEffect(() => { if (activeTopic) setTopic(activeTopic); }, [activeTopic]);
-  const persist = u => { setFiles(u); localStorage.setItem(KEY, JSON.stringify(u)); };
-  const addFile = () => {
-    if (!name.trim()) return;
-    const f = { id: Date.now(), name: name.trim(), topic, description: desc.trim(), date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }), type: "file" };
-    const file = fileRef.current?.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = ev => { f.dataUrl = ev.target.result; f.type = file.type.startsWith("image/") ? "image" : file.type === "application/pdf" ? "pdf" : "file"; f.fileName = file.name; persist([f, ...files]); setName(""); setDesc(""); };
-      reader.readAsDataURL(file);
-    } else {
-      persist([f, ...files]);
-      setName(""); setDesc("");
-    }
-    setAdding(false);
-  };
-  const remove = id => persist(files.filter(f => f.id !== id));
-  const filtered = activeTopic ? files.filter(f => f.topic === activeTopic) : files;
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
-        <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: "uppercase", fontFamily: F.body }}>Library · {files.length} files</div>
-        <button onClick={() => setAdding(a => !a)} style={{ padding: "5px 12px", background: adding ? T.ndY : "transparent", border: `1px solid ${adding ? T.ndY : T.border}`, borderRadius: 20, color: adding ? T.bg0 : T.txt3, fontSize: 9, cursor: "pointer", fontFamily: F.body, letterSpacing: "1px", textTransform: "uppercase" }}>+ Add File</button>
-      </div>
-      {adding && (
-        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "16px 18px", marginBottom: 16, boxShadow: T.shadow }}>
-          <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="File name / title" value={name} onChange={e => setName(e.target.value)} />
-          <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="Topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} />
-          <input style={{ width: "100%", boxSizing: "border-box", background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt0, padding: "9px 13px", fontSize: 13, fontFamily: F.body, outline: "none", marginBottom: 9 }} placeholder="Description (optional)" value={desc} onChange={e => setDesc(e.target.value)} />
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ padding: "6px 12px", background: T.bg2, border: `1px dashed ${T.border}`, borderRadius: 6, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: T.txt2, fontFamily: F.body }}>📎 Attach file <input ref={fileRef} type="file" style={{ display: "none" }} /></label>
-          </div>
-          <div style={{ display: "flex", gap: 7 }}> <button onClick={addFile} style={{ padding: "8px 18px", background: T.btnP, border: "none", borderRadius: 6, color: T.btnPTx, cursor: "pointer", fontSize: 10, fontFamily: F.body, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Save</button> <button onClick={() => setAdding(false)} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${T.border}`, borderRadius: 6, color: T.txt3, cursor: "pointer", fontSize: 10, fontFamily: F.body }}>Cancel</button> </div>
-        </div>
-      )}
-      {filtered.length === 0 ? <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>{activeTopic ? `No files for "${activeTopic}" yet.` : "No files in library. Click + Add File to upload PDFs, images, or documents."}</div>
-        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 10 }}>
-          {filtered.map(f => (
-            <div key={f.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px", boxShadow: T.shadow, position: "relative" }}>
-              <button onClick={() => remove(f.id)} style={{ position: "absolute", top: 6, right: 8, background: "none", border: "none", color: T.txt3, cursor: "pointer", fontSize: 14 }}>×</button>
-              {f.dataUrl && f.type === "image" && <img src={f.dataUrl} alt={f.name} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 4, marginBottom: 8 }} />}
-              {f.dataUrl && f.type === "pdf" && <div style={{ width: "100%", height: 80, background: T.ndR + "20", borderRadius: 4, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>📄</div>}
-              <div style={{ fontSize: 12, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, marginBottom: 4 }}>{f.name}</div>
-              {f.topic && <Pill label={f.topic} T={T} />}
-              {f.description && <div style={{ fontSize: 10, color: T.txt2, fontFamily: F.body, marginTop: 6, fontStyle: "italic" }}>{f.description.slice(0, 120)}</div>}
-              {f.fileName && <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, marginTop: 4 }}>{f.fileName}</div>}
-              <div style={{ fontSize: 8, color: T.txt3, marginTop: 6 }}>{f.date}</div>
-              {f.dataUrl && <a href={f.dataUrl} download={f.fileName || f.name} style={{ display: "inline-block", marginTop: 8, fontSize: 9, color: T.ndY, fontFamily: F.body, textDecoration: "none" }}>↓ Download</a>}
-            </div>
-          ))}
-        </div>}
-    </div>
-  );
-}
-/* ════════════════════════════════════════
-ROOT APP
-════════════════════════════════════════ */
+/* ── ROOT APP ── */
 export default function App() {
   const [dark, setDark] = useState(false);
   const TH = dark ? DARK : LIGHT;
@@ -1502,7 +1445,22 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false); // NEW: Yehuti Assistant state
   // ── Scraped content stores ──
-  const [scrapedBooks, setScrapedBooks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-books") || "[]"); } catch { return []; } });
+  const [scrapedBooks, setScrapedBooks] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("ba9-books") || "[]");
+      const localBooks = LIBRARY_BOOKS.map(b => ({
+        ...b,
+        _topic: b.topics?.[0] || "",
+        description: "Local PDF — " + (b.filename || ""),
+        source: "Local Library",
+        readUrl: "",
+        downloadUrl: ""
+      }));
+      // Merge: local PDFs first, then deduplicate against stored
+      const allIds = new Set(localBooks.map(b => b.id));
+      return [...localBooks, ...stored.filter(b => !allIds.has(b.id))];
+    } catch { return []; }
+  });
   const [scrapedImages, setScrapedImages] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-images") || "[]"); } catch { return []; } });
   const [scrapedLinks, setScrapedLinks] = useState(() => { try { return JSON.parse(localStorage.getItem("ba9-links") || "[]"); } catch { return []; } });
   const [scraping, setScraping] = useState({ books: false, images: false, links: false, all: false });
@@ -1657,7 +1615,6 @@ export default function App() {
             {tab === "maps" && <MapsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "authors" && <AuthorsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "notes" && <NotesScreen T={TH} activeTopic={topic} />}
-            {tab === "library" && <LibraryScreen T={TH} activeTopic={topic} />}
             {tab === "settings" && <SettingsScreen T={TH} />}
           </div>
         </div>
