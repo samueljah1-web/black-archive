@@ -1489,13 +1489,15 @@ export default function App() {
   const [scrapedBooks, setScrapedBooks] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("ba9-books") || "[]");
+      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
       const localBooks = LIBRARY_BOOKS.map(b => ({
         ...b,
         _topic: b.topics?.[0] || "",
-        description: "Local PDF — " + (b.filename || ""),
+        description: b.description || "Local PDF — " + (b.filename || ""),
         source: "Local Library",
-        readUrl: "",
-        downloadUrl: ""
+        readUrl: isLocal && b.filename ? `/library/${b.filename}` : "",
+        downloadUrl: "",
+        localDataUrl: isLocal && b.filename ? `/library/${b.filename}` : null
       }));
       // Merge: local PDFs first, then deduplicate against stored
       const allIds = new Set(localBooks.map(b => b.id));
@@ -1520,7 +1522,10 @@ export default function App() {
       await new Promise(r => setTimeout(r, 200));
     }
     const deduped = results.filter((b, i, arr) => arr.findIndex(x => x.id === b.id) === i);
-    saveBooks(topicFilter ? [...scrapedBooks.filter(b => b._topic !== topicFilter), ...deduped] : deduped);
+    // Preserve local PDFs when saving scraped results
+    const locals = scrapedBooks.filter(b => b.source === "Local Library" || b.id?.startsWith("local_"));
+    const localIds = new Set(locals.map(b => b.id));
+    saveBooks(topicFilter ? [...locals, ...scrapedBooks.filter(b => b._topic !== topicFilter && !localIds.has(b.id)), ...deduped] : [...locals, ...deduped]);
     setScraping(s => ({ ...s, books: false }));
     setScrapeProgress("Books done!");
   }, [scrapedBooks, saveBooks]);
