@@ -120,7 +120,7 @@ const CURATED_IMAGES = [
 ];
 const CURATED_LINKS = [
   { id: "cl1", title: "BlackPast.org — Peer-Reviewed Black History", url: "https://www.blackpast.org", domain: "blackpast.org", description: "Encyclopaedia of Black history verified by Black academics — the closest thing to a Wikipedia for African and diasporal history.", category: "Encyclopedia" },
-  { id: "cl2", title: "African Studies — Columbia University", url: "https://library.columbia.edu/libraries/global/africanstudies.html", domain: "columbia.edu", description: "Comprehensive academic resource guide for African studies.", category: "Academic" },
+  { id: "cl2", title: "African Studies — Columbia University Libraries", url: "https://library.columbia.edu/collections/collecting-areas/african.html", domain: "columbia.edu", description: "Comprehensive academic resource guide for African studies at Columbia University.", category: "Academic" },
   { id: "cl3", title: "Internet Archive — African History Texts", url: "https://archive.org/search?query=african+history&mediatype=texts", domain: "archive.org", description: "Free digitised texts on African history, culture and philosophy.", category: "Archive" },
   { id: "cl4", title: "Schomburg Center for Research in Black Culture", url: "https://www.nypl.org/locations/schomburg", domain: "nypl.org", description: "World-leading research facility on the African diaspora.", category: "Library" },
   { id: "cl5", title: "Timbuktu Manuscripts Project", url: "https://www.tombouctoumanuscripts.org", domain: "tombouctoumanuscripts.org", description: "Over 700,000 manuscripts from Timbuktu — mathematics, astronomy, medicine from the 13th–17th centuries.", category: "Archive" },
@@ -408,6 +408,7 @@ function BookCover({ book, size = 52, T }) {
 /* ── Book Reader ── */
 function BookReader({ book, onClose, T }) {
   const embed = book.iaId ? `https://archive.org/stream/${book.iaId}?ui=embed#page/n0/mode/2up` : null;
+  const localPdf = book.localDataUrl || null;
   return (
     <div style={{ position: "fixed", inset: 0, background: T.isDark ? "rgba(4,3,2,0.98)" : "rgba(245,240,232,0.98)", zIndex: 3000, display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "10px 18px", background: T.card, borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
@@ -428,6 +429,13 @@ function BookReader({ book, onClose, T }) {
             📖 <span style={{ color: T.ndY }}>{book.title}</span> — If reader doesn't load, click ↗ Open Full above.
           </div>
           <iframe src={embed} style={{ flex: 1, width: "100%", border: "none", display: "block", minHeight: 0 }} title={book.title} allowFullScreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms" />
+        </div>
+      ) : localPdf ? (
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "6px 18px", background: T.bg2, borderBottom: `1px solid ${T.border}`, fontSize: 10, color: T.txt3, fontFamily: F.body }}>
+            📖 Local PDF — <span style={{ color: T.ndY }}>{book.title}</span>
+          </div>
+          <embed src={localPdf} type="application/pdf" style={{ flex: 1, width: "100%", border: "none", minHeight: 0 }} />
         </div>
       ) : (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: 40, textAlign: "center" }}>
@@ -476,6 +484,7 @@ function MapViewer({ map, onClose, T }) {
 }
 /* ── Book Card ── */
 function BookCard({ book, saved, dlSt, onSave, onDownload, onRead, T }) {
+  const canRead = book.iaId || book.localDataUrl;
   return (
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10, boxShadow: T.shadow, borderLeft: `3px solid ${book.featured ? T.ndY : T.ndB}` }}>
       {book.featured && <div style={{ fontSize: 8, letterSpacing: 2, color: T.ndY, textTransform: "uppercase", fontFamily: F.body, marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}><NdDiamond s={10} T={T} /> Featured Work</div>}
@@ -495,10 +504,10 @@ function BookCard({ book, saved, dlSt, onSave, onDownload, onRead, T }) {
       </div>
       {book.subjects?.length > 0 && <div style={{ marginBottom: 7 }}>{book.subjects.map(s => <Pill key={s} label={s} T={T} />)}</div>}
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-        {book.iaId && <Btn v="primary" onClick={() => onRead(book)} T={T} sm>📖 Read Here</Btn>}
+        {canRead && <Btn v="primary" onClick={() => onRead(book)} T={T} sm>📖 Read Here</Btn>}
         {book.downloadUrl && <Btn v="green" onClick={() => onDownload(book)} T={T} sm>↓ PDF</Btn>}
         {book.readUrl && <Btn href={book.readUrl} T={T} sm>↗ Source</Btn>}
-        {!saved ? <Btn onClick={() => onSave(book)} T={T} sm>+ Save</Btn> : <Pill label="Saved" color="green" T={T} />}
+        {!saved ? <Btn onClick={() => onSave(book)} T={T} sm>+ Save</Btn> : <Pill label="Saved ✓" color="green" T={T} />}
         {dlSt === "downloaded" && <Pill label="Downloaded ✓" color="green" T={T} />}
       </div>
     </div>
@@ -1003,6 +1012,8 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
   const [q, setQ] = useState(globalQuery || activeTopic || "");
   const [manualRes, setManualRes] = useState([]); const [searching, setSearching] = useState(false);
   const [dlSt, setDlSt] = useState({}); const [view, setView] = useState("browse"); const [reading, setReading] = useState(null);
+  const [localUploads, setLocalUploads] = useState(() => { try { return JSON.parse(sessionStorage.getItem('ba-uploads') || '[]'); } catch { return []; } });
+  const fileInputRef = useRef(null);
   const [cat, setCat] = useState(() => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } });
   useEffect(() => { if (globalQuery) setQ(globalQuery); }, [globalQuery]);
   useEffect(() => { if (activeTopic) setQ(activeTopic); }, [activeTopic]);
@@ -1010,6 +1021,31 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
   const inCat = id => cat.some(b => b.id === id);
   const saveBook = book => { if (inCat(book.id)) return; persist([{ ...book, addedDate: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) }, ...cat]); };
   const tryDl = book => { const u = book.downloadUrl; if (u) { const a = document.createElement("a"); a.href = u; a.download = `${book.title}.pdf`; a.target = "_blank"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setDlSt(s => ({ ...s, [book.id]: "downloaded" })); saveBook(book); } else { setDlSt(s => ({ ...s, [book.id]: "unavailable" })); } };
+  const handlePdfUpload = e => {
+    const files = Array.from(e.target.files || []);
+    files.forEach(file => {
+      if (file.type !== 'application/pdf') return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const entry = {
+          id: `upload-${Date.now()}-${file.name}`,
+          title: file.name.replace(/\.pdf$/i, ''),
+          author: '(Uploaded PDF)',
+          year: '—',
+          source: 'Uploaded',
+          description: `Uploaded ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })} — ${(file.size / 1024 / 1024).toFixed(1)} MB`,
+          localDataUrl: ev.target.result,
+          readUrl: '',
+          downloadUrl: ''
+        };
+        const updated = [entry, ...localUploads];
+        setLocalUploads(updated);
+        sessionStorage.setItem('ba-uploads', JSON.stringify(updated));
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
   const manualSearch = async () => {
     if (!q.trim()) return; setSearching(true); setManualRes([]);
     try {
@@ -1020,14 +1056,14 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
     setSearching(false);
   };
   const browseable = useMemo(() => {
-    let b = [...scrapedBooks];
-    if (activeTopic) b = b.filter(bk => bk._topic === activeTopic);
+    let b = [...localUploads, ...scrapedBooks];
+    if (activeTopic) b = b.filter(bk => bk._topic === activeTopic || bk.topics?.includes(activeTopic));
     if (q && q.trim() && view === "browse") {
       const qq = q.toLowerCase();
       b = b.filter(bk => `${bk.title} ${bk.author} ${bk.description || ""}`.toLowerCase().includes(qq) || qq.split(" ").some(w => w.length > 2 && `${bk.title} ${bk.author}`.toLowerCase().includes(w)));
     }
     return b;
-  }, [scrapedBooks, activeTopic, q, view]);
+  }, [scrapedBooks, localUploads, activeTopic, q, view]);
   const FEATURED = { id: "/works/OL2639765W", title: "Civilization or Barbarism", author: "Cheikh Anta Diop", year: 1991, subjects: ["African civilization", "Afrocentrism"], iaId: "civilizationorba0000diop", coverId: null, editions: 3, description: "Diop's landmark work establishing Africa as the cradle of civilisation.", featured: true, source: "Open Library", readUrl: "https://archive.org/details/civilizationorba0000diop", downloadUrl: "https://archive.org/download/civilizationorba0000diop/civilizationorba0000diop.pdf" };
   return (
     <>
@@ -1052,6 +1088,11 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
               <input style={{ flex: 1, background: T.bg2, border: `1px solid ${T.border}`, borderRight: "none", borderRadius: "6px 0 0 6px", color: T.txt0, padding: "10px 14px", fontSize: 13, fontFamily: F.body, outline: "none" }} placeholder={`Filter books${activeTopic ? ` in ${activeTopic}` : ""}…`} value={q} onChange={e => setQ(e.target.value)} />
               <div style={{ padding: "10px 14px", background: T.bg2, border: `1px solid ${T.border}`, borderLeft: "none", borderRadius: "0 6px 6px 0", color: T.txt3, fontSize: 12 }}>🔍</div>
             </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <input ref={fileInputRef} type="file" accept="application/pdf" multiple style={{ display: "none" }} onChange={handlePdfUpload} />
+              <button onClick={() => fileInputRef.current?.click()} style={{ padding: "5px 12px", background: "transparent", border: `1px dashed ${T.ndY}`, borderRadius: 20, color: T.ndY, fontSize: 9, cursor: "pointer", fontFamily: F.body, letterSpacing: "1px", textTransform: "uppercase" }}>📄 Upload PDF to Read</button>
+              {localUploads.length > 0 && <span style={{ fontSize: 9, color: T.txt3, fontFamily: F.body }}>{localUploads.length} uploaded · in session only</span>}
+            </div>
             <BookCard book={FEATURED} saved={inCat(FEATURED.id)} dlSt={dlSt[FEATURED.id]} onSave={saveBook} onDownload={tryDl} onRead={setReading} T={T} />
             {browseable.length > 0 && (
               <>
@@ -1059,7 +1100,7 @@ function BooksScreen({ T, activeTopic, globalQuery, scrapedBooks, onScrapeBooks,
                 {browseable.map(b => <BookCard key={b.id} book={b} saved={inCat(b.id)} dlSt={dlSt[b.id]} onSave={saveBook} onDownload={tryDl} onRead={setReading} T={T} />)}
               </>
             )}
-            {browseable.length === 0 && scrapedBooks.length === 0 && <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>Click ⟳ Populate to load books for {activeTopic || "all topics"}.</div>}
+            {browseable.length === 0 && scrapedBooks.length === 0 && <div style={{ textAlign: "center", padding: "30px 0", color: T.txt3, fontStyle: "italic", fontSize: 12, fontFamily: F.display }}>Click ⟳ Populate to load books for {activeTopic || "all topics"}, or upload a PDF above.</div>}
           </>
         )}
         {/* Search — Open Library */}
