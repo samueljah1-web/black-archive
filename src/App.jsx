@@ -556,6 +556,7 @@ const NAV_ITEMS = [
   { id: "maps", icon: "🗺", label: "Maps" },
   { id: "authors", icon: "✦", label: "Authors" },
   { id: "notes", icon: "✍", label: "Notes" },
+  { id: "drive", icon: "☁", label: "Drive" },
   { id: "settings", icon: "⚙", label: "Settings" },
 ];
 function Sidebar({ T, tab, setTab, topic, setTopic, dark, setDark, collapsed, setCollapsed }) {
@@ -1425,6 +1426,181 @@ function AuthorsScreen({ T, activeTopic, globalQuery }) {
     </div>
   );
 }
+/* ── DriveScreen — Google Drive PDF library ── */
+function DriveScreen({ T, activeTopic, globalQuery }) {
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [searchQuery, setSearchQuery] = useState(globalQuery || activeTopic || '');
+  const [viewingFile, setViewingFile] = useState(null);
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+  const [statusMsg, setStatusMsg] = useState(null);
+
+  const loadFiles = async (query) => {
+    setLoading(true);
+    setError(null);
+    setStatusMsg(null);
+    try {
+      const params = new URLSearchParams({ action: 'listFiles' });
+      if (query?.trim()) params.set('query', query);
+      params.set('pageSize', '100');
+      const r = await fetch(`/api/drive?${params}`);
+      const data = await r.json();
+      if (data.error) {
+        if (data.hint) setStatusMsg({ type: 'info', text: data.hint });
+        setFiles([]);
+      } else {
+        setFiles(data.files || []);
+      }
+    } catch (e) {
+      setError(e.message || 'Failed to load files');
+      setFiles([]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadFiles(searchQuery); }, []);
+
+  const viewPdf = async (file) => {
+    setViewingFile(file);
+    setPdfUrl(null);
+    try {
+      const r = await fetch(`/api/drive?action=getFile&fileId=${file.id}`);
+      if (r.headers.get('content-type')?.includes('application/pdf')) {
+        const blob = await r.blob();
+        setPdfUrl(URL.createObjectURL(blob));
+      } else {
+        const data = await r.json();
+        setError(data.error || 'Could not load PDF');
+        setViewingFile(null);
+      }
+    } catch (e) {
+      setError(e.message || 'Failed to load PDF');
+      setViewingFile(null);
+    }
+  };
+
+  const handleUpload = async (e) => {
+    const fls = Array.from(e.target.files || []);
+    if (!fls.length) return;
+    setUploading(true);
+    setStatusMsg(null);
+    for (const f of fls) {
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        const r = await fetch(`/api/drive?action=upload&name=${encodeURIComponent(f.name)}&mimeType=${f.type}`, { method: 'POST', body: fd });
+        const d = await r.json();
+        setStatusMsg(d.id ? { type: 'success', text: `✓ ${f.name} uploaded` } : { type: 'error', text: `✗ ${f.name}: ${d.error || 'Upload failed'}` });
+      } catch (e) { setStatusMsg({ type: 'error', text: `✗ ${f.name}: ${e.message}` }); }
+    }
+    setUploading(false);
+    e.target.value = '';
+    loadFiles(searchQuery);
+  };
+
+  const deleteFile = async (fileId, fileName) => {
+    if (!confirm(`Delete "${fileName}" from Drive?`)) return;
+    try {
+      await fetch(`/api/drive?action=delete&fileId=${fileId}`, { method: 'DELETE' });
+      setFiles(f => f.filter(x => x.id !== fileId));
+      setStatusMsg({ type: 'success', text: `✓ ${fileName} deleted` });
+    } catch (e) { setStatusMsg({ type: 'error', text: `✗ Delete failed: ${e.message}` }); }
+  };
+
+  const search = () => loadFiles(searchQuery);
+
+  return (
+    <div>
+      {viewingFile && pdfUrl && (
+        <div style={{ position: 'fixed', inset: 0, background: T.isDark ? 'rgba(4,3,2,0.98)' : 'rgba(245,240,232,0.98)', zIndex: 3000, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '10px 18px', background: T.card, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+            <span style={{ fontSize: 18 }}>☁</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: T.txt0, fontFamily: F.display, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{viewingFile.name}</div>
+              <div style={{ fontSize: 10, color: T.txt2, fontFamily: F.body }}>Google Drive · {viewingFile.size ? `${(viewingFile.size / 1024 / 1024).toFixed(1)} MB` : ''}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <a href={`https://drive.google.com/file/d/${viewingFile.id}/view`} target="_blank" rel="noreferrer"><Btn v="primary" T={T} sm>↗ Open in Drive</Btn></a>
+              <Btn onClick={() => { setViewingFile(null); setPdfUrl(null); }} T={T} sm>✕ Close</Btn>
+            </div>
+          </div>
+          <NdStripe h={3} />
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '6px 18px', background: T.bg2, borderBottom: `1px solid ${T.border}`, fontSize: 10, color: T.txt3, fontFamily: F.body }}>
+              📖 <span style={{ color: T.ndY }}>{viewingFile.name}</span> — streamed from Google Drive
+            </div>
+            <embed src={pdfUrl} type="application/pdf" style={{ flex: 1, width: '100%', border: 'none', minHeight: 0 }} />
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ fontSize: 10, letterSpacing: 3, color: T.txt3, textTransform: 'uppercase', fontFamily: F.body }}>☁ Google Drive · {files.length} PDFs</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <input ref={fileInputRef} type="file" accept=".pdf,application/pdf" multiple style={{ display: 'none' }} onChange={handleUpload} />
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploading} style={{ padding: '5px 12px', background: uploading ? T.bg3 : T.btnP, border: 'none', borderRadius: 20, color: uploading ? T.txt3 : T.btnPTx, fontSize: 9, cursor: uploading ? 'not-allowed' : 'pointer', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: F.body, fontWeight: 600 }}>{uploading ? 'Uploading…' : '+ Upload PDF'}</button>
+        </div>
+      </div>
+
+      {statusMsg && (
+        <div style={{ padding: '10px 16px', marginBottom: 14, borderRadius: 8, fontSize: 11, fontFamily: F.body, background: statusMsg.type === 'success' ? `${T.ndG}20` : statusMsg.type === 'error' ? `${T.ndR}18` : T.bg2, border: `1px solid ${statusMsg.type === 'success' ? T.ok : statusMsg.type === 'error' ? T.err : T.border}`, color: statusMsg.type === 'success' ? T.ok : statusMsg.type === 'error' ? T.err : T.txt2 }}>
+          {statusMsg.text} <button onClick={() => setStatusMsg(null)} style={{ float: 'right', background: 'none', border: 'none', color: T.txt3, cursor: 'pointer', fontSize: 13 }}>×</button>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 0, marginBottom: 14 }}>
+        <input style={{ flex: 1, background: T.bg2, border: `1px solid ${T.border}`, borderRight: 'none', borderRadius: '6px 0 0 6px', color: T.txt0, padding: '10px 14px', fontSize: 13, fontFamily: F.body, outline: 'none' }} placeholder="Search files in Google Drive…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && search()} />
+        <button onClick={search} disabled={loading} style={{ padding: '10px 18px', background: loading ? T.bg3 : T.btnP, border: 'none', borderRadius: '0 6px 6px 0', color: loading ? T.txt3 : T.btnPTx, fontSize: 10, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: F.body, whiteSpace: 'nowrap' }}>{loading ? '…' : '🔍 Search'}</button>
+      </div>
+
+      {loading && <div style={{ padding: '30px 0', textAlign: 'center', color: T.ndY, fontStyle: 'italic', fontSize: 13, fontFamily: F.display }}>Loading files from Google Drive…</div>}
+
+      {error && <div style={{ padding: '20px', background: `${T.ndR}18`, border: `1px solid ${T.err}`, borderRadius: 8, color: T.err, fontSize: 12, fontFamily: F.body, marginBottom: 16 }}>{error}</div>}
+
+      {!loading && files.length === 0 && !error && (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: T.txt3, fontStyle: 'italic', fontSize: 12, fontFamily: F.display }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>☁</div>
+          <div>No files found in Google Drive.</div>
+          <div style={{ marginTop: 8, fontSize: 11 }}>Upload PDFs above or configure the service account in Vercel env vars.</div>
+          <div style={{ marginTop: 20, background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: '16px 20px', textAlign: 'left', fontSize: 11, color: T.txt2, fontFamily: F.body, lineHeight: 1.7 }}>
+            <span style={{ color: T.ndY, fontWeight: 600 }}>Setup Required:</span>
+            <ol style={{ margin: '8px 0 0 20px', padding: 0 }}>
+              <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" style={{ color: T.ndY }}>Google Cloud Console</a></li>
+              <li>Create a service account &amp; enable Drive API</li>
+              <li>Delegate domain-wide authority to <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>samueljah1@gmail.com</code></li>
+              <li>Set <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>GDRIVE_SERVICE_ACCOUNT_EMAIL</code> and <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>GDRIVE_PRIVATE_KEY</code> in Vercel env vars</li>
+            </ol>
+          </div>
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 12 }}>
+          {files.filter(f => f.mimeType === 'application/pdf').map(file => (
+            <div key={file.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden', boxShadow: T.shadow }}>
+              <div style={{ height: 140, background: `linear-gradient(160deg,${T.ndB}30,${T.bg3})`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative' }} onClick={() => viewPdf(file)}>
+                <span style={{ fontSize: 44, opacity: 0.4 }}>📄</span>
+                <div style={{ position: 'absolute', bottom: 8, right: 8, background: `${T.ndY}20`, padding: '2px 8px', borderRadius: 20, fontSize: 9, color: T.ndY, fontFamily: F.body }}>{file.size ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : '—'}</div>
+              </div>
+              <div style={{ padding: '10px 14px' }}>
+                <div style={{ fontSize: 12.5, color: T.txt0, fontFamily: F.display, fontWeight: 600, lineHeight: 1.3, cursor: 'pointer', marginBottom: 3 }} onClick={() => viewPdf(file)}>{file.name?.replace(/\.pdf$/i, '') || 'Untitled'}</div>
+                <div style={{ fontSize: 9, color: T.txt3, fontFamily: F.body, marginBottom: 8 }}>{file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}{file.owners?.[0]?.displayName ? ` · ${file.owners[0].displayName}` : ''}</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <Btn v="primary" onClick={() => viewPdf(file)} T={T} sm>📖 Read</Btn>
+                  <Btn href={`https://drive.google.com/file/d/${file.id}/view`} T={T} sm>↗ Drive</Btn>
+                  <button onClick={() => deleteFile(file.id, file.name)} style={{ padding: '5px 9px', background: 'transparent', border: `1px solid ${T.border}`, borderRadius: 4, color: T.txt3, cursor: 'pointer', fontSize: 10, fontFamily: F.body }} title="Delete">🗑</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 /* ── NotesScreen (fully restored) ── */
 function NotesScreen({ T, activeTopic }) {
   const KEY = "ba-notes-v3";
@@ -1663,6 +1839,7 @@ export default function App() {
             {tab === "maps" && <MapsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "authors" && <AuthorsScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "notes" && <NotesScreen T={TH} activeTopic={topic} />}
+            {tab === "drive" && <DriveScreen T={TH} activeTopic={topic} globalQuery={globalQuery} />}
             {tab === "settings" && <SettingsScreen T={TH} />}
           </div>
         </div>
