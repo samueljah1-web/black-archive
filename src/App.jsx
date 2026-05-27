@@ -1490,14 +1490,16 @@ export default function App() {
     try {
       const stored = JSON.parse(localStorage.getItem("ba9-books") || "[]");
       const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      const GIT_BASE = "https://raw.githubusercontent.com/samueljah1-web/black-archive-library-data/main/";
       const localBooks = LIBRARY_BOOKS.map(b => ({
         ...b,
         _topic: b.topics?.[0] || "",
         description: b.topics?.length ? `Topics: ${b.topics.join(", ")}` : "",
-        source: "Local Library",
-        readUrl: isLocal && b.filename ? `/library/${b.filename}` : "",
+        source: "Black Archive Library",
         downloadUrl: "",
-        localDataUrl: isLocal && b.filename ? `/library/${b.filename}` : null
+        // On localhost: serve via Vite dev middleware. On live: fetch from raw GitHub.
+        readUrl: isLocal && b.filename ? `/library/${encodeURI(b.filename)}` : b.filename ? GIT_BASE + encodeURI(b.filename) : "",
+        localDataUrl: isLocal && b.filename ? `/library/${encodeURI(b.filename)}` : b.filename ? GIT_BASE + encodeURI(b.filename) : null
       }));
       // Merge: local PDFs first, then deduplicate against stored
       const allIds = new Set(localBooks.map(b => b.id));
@@ -1522,8 +1524,8 @@ export default function App() {
       await new Promise(r => setTimeout(r, 200));
     }
     const deduped = results.filter((b, i, arr) => arr.findIndex(x => x.id === b.id) === i);
-    // Preserve local PDFs when saving scraped results
-    const locals = scrapedBooks.filter(b => b.source === "Local Library" || b.id?.startsWith("local_"));
+    // Preserve local/GitHub PDFs when saving scraped results
+    const locals = scrapedBooks.filter(b => b.source === "Black Archive Library" || b.id?.startsWith("local_"));
     const localIds = new Set(locals.map(b => b.id));
     saveBooks(topicFilter ? [...locals, ...scrapedBooks.filter(b => b._topic !== topicFilter && !localIds.has(b.id)), ...deduped] : [...locals, ...deduped]);
     setScraping(s => ({ ...s, books: false }));
