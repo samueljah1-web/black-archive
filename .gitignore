@@ -1,6 +1,12 @@
-.vercel
-
-# Local Netlify folder
-.netlify
-.env*.local
+node_modules/
 dist/
+.hermes/
+*.local
+.vercel/output/
+.vercel/node/
+.vercel/README.txt
+.vercel/project.json
+.git-credentials
+.env
+.env.*
+!env.example
