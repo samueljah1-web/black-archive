@@ -1,6 +1,10 @@
 // Vercel serverless proxy for Google Drive API
-// Add GDRIVE_SERVICE_ACCOUNT_EMAIL and GDRIVE_PRIVATE_KEY to Vercel env vars
-// Or use GDRIVE_ACCESS_TOKEN for delegated user auth
+// Uses a service account JSON key file placed at black-archive-sa.json
+// Add GDRIVE_SA_JSON to Vercel env vars (the entire service account JSON as a single string)
+// Or place black-archive-sa.json in the project root
+import { promises as fs } from 'fs';
+import path from 'path';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -8,25 +12,39 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { action } = req.query; // listFiles, getFile, upload, delete
+  const { action } = req.query;
 
-  const serviceEmail = process.env.GDRIVE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GDRIVE_PRIVATE_KEY;
-  const delegateUser = 'samueljah1@gmail.com'; // impersonate this user
+  let saEmail, privateKey, projectId;
 
-  // If no service account configured, return mock/fallback for dev
-  if (!serviceEmail || !privateKey) {
-    if (action === 'listFiles') {
-      return res.status(200).json({ files: [], hint: 'Set GDRIVE_SERVICE_ACCOUNT_EMAIL and GDRIVE_PRIVATE_KEY in Vercel env to enable Drive.' });
+  // Try env var first (set in Vercel dashboard), then local file
+  if (process.env.GDRIVE_SA_JSON) {
+    try {
+      const sa = JSON.parse(process.env.GDRIVE_SA_JSON);
+      saEmail = sa.client_email;
+      privateKey = sa.private_key;
+      projectId = sa.project_id;
+    } catch (e) {
+      return res.status(500).json({ error: 'GDRIVE_SA_JSON env var is not valid JSON' });
     }
-    return res.status(200).json({ error: 'Drive not configured' });
+  } else {
+    // Try local file (dev mode)
+    try {
+      const filePath = path.join(process.cwd(), 'black-archive-sa.json');
+      const raw = await fs.readFile(filePath, 'utf-8');
+      const sa = JSON.parse(raw);
+      saEmail = sa.client_email;
+      privateKey = sa.private_key;
+      projectId = sa.project_id;
+    } catch (e) {
+      return res.status(200).json({ files: [], hint: 'Place black-archive-sa.json in project root or set GDRIVE_SA_JSON env var.' });
+    }
   }
 
-  try {
-    // Get an access token using JWT auth (service account impersonating user)
-    const { getAccessToken } = await import('./auth.js');
-    const accessToken = await getAccessToken(serviceEmail, privateKey, delegateUser);
+  // The shared folder ID for The Black Archive
+  const ROOT_FOLDER_ID = '1LO8IHu6qPv3katxDZ7K7BN_HoWTDbbBS';
 
+  try {
+    const accessToken = await getAccessToken(saEmail, privateKey);
     const DRIVE_API = 'https://www.googleapis.com/drive/v3';
     const headers = {
       Authorization: `Bearer ${accessToken}`,
@@ -38,13 +56,15 @@ export default async function handler(req, res) {
         const query = req.query.query || '';
         const pageSize = req.query.pageSize || 50;
         const pageToken = req.query.pageToken || '';
-        const q = query
-          ? `name contains '${query.replace(/'/g, "\\'")}' and trashed=false`
-          : 'trashed=false';
+        // Only list files in the shared Archive folder
+        let q = `'${ROOT_FOLDER_ID}' in parents and trashed=false`;
+        if (query) {
+          q += ` and name contains '${query.replace(/'/g, "\\'")}'`;
+        }
         const params = new URLSearchParams({
           q,
           pageSize: String(pageSize),
-          fields: 'files(id,name,mimeType,size,modifiedTime,owners(displayName)),nextPageToken',
+          fields: 'files(id,name,mimeType,size,modifiedTime),nextPageToken',
           orderBy: 'modifiedTime desc',
           ...(pageToken && { pageToken }),
         });
@@ -56,13 +76,9 @@ export default async function handler(req, res) {
       case 'getFile': {
         const fileId = req.query.fileId;
         if (!fileId) return res.status(400).json({ error: 'Missing fileId' });
-
-        // For PDFs, redirect to the download URL
         const r = await fetch(`${DRIVE_API}/files/${fileId}?fields=id,name,mimeType,size,webViewLink,modifiedTime`, { headers });
         const meta = await r.json();
-
         if (meta.mimeType === 'application/pdf') {
-          // Return a signed download link
           const dl = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
@@ -72,7 +88,6 @@ export default async function handler(req, res) {
           res.setHeader('Content-Length', blob.byteLength);
           return res.status(200).send(Buffer.from(blob));
         }
-
         return res.status(200).json(meta);
       }
 
@@ -80,43 +95,28 @@ export default async function handler(req, res) {
         if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
         const { name, mimeType } = req.query;
         if (!name) return res.status(400).json({ error: 'Missing filename' });
-
-        // Upload via multipart or simple upload
         const metadata = {
           name,
           mimeType: mimeType || 'application/pdf',
-          parents: req.query.folderId ? [req.query.folderId] : [],
+          parents: [ROOT_FOLDER_ID],
         };
-
-        // If req.body is raw bytes (for direct upload from browser)
-        const isMultipart = req.headers['content-type']?.includes('multipart');
-        let uploadBody;
-        let uploadHeaders = { Authorization: `Bearer ${accessToken}` };
-
-        if (isMultipart) {
-          // Forward the multipart body as-is
-          uploadBody = req;
-          uploadHeaders['Content-Type'] = req.headers['content-type'];
-        } else {
-          // Simple upload — body is the file bytes
-          const boundary = 'drive_boundary_42';
-          const bodyParts = [
-            `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
-            `--${boundary}\r\nContent-Type: ${mimeType || 'application/pdf'}\r\n\r\n`,
-          ];
-          // Read raw body bytes
-          const chunks = [];
-          for await (const chunk of req) chunks.push(chunk);
-          const fileBuffer = Buffer.concat(chunks);
-          bodyParts.push(fileBuffer.toString('base64'));
-          bodyParts.push(`\r\n--${boundary}--`);
-          uploadBody = bodyParts.join('');
-          uploadHeaders['Content-Type'] = `multipart/related; boundary=${boundary}`;
-        }
-
+        const boundary = 'drive_boundary_42';
+        const bodyParts = [
+          `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+          `--${boundary}\r\nContent-Type: ${mimeType || 'application/pdf'}\r\n\r\n`,
+        ];
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const fileBuffer = Buffer.concat(chunks);
+        bodyParts.push(fileBuffer.toString('base64'));
+        bodyParts.push(`\r\n--${boundary}--`);
+        const uploadBody = bodyParts.join('');
         const r = await fetch(`${DRIVE_API}/files?uploadType=multipart`, {
           method: 'POST',
-          headers: uploadHeaders,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`,
+          },
           body: uploadBody,
         });
         const data = await r.json();
@@ -126,10 +126,7 @@ export default async function handler(req, res) {
       case 'delete': {
         const fileId = req.query.fileId;
         if (!fileId) return res.status(400).json({ error: 'Missing fileId' });
-        await fetch(`${DRIVE_API}/files/${fileId}`, {
-          method: 'DELETE',
-          headers,
-        });
+        await fetch(`${DRIVE_API}/files/${fileId}`, { method: 'DELETE', headers });
         return res.status(200).json({ success: true });
       }
 
@@ -137,8 +134,8 @@ export default async function handler(req, res) {
         const q = req.query.q;
         if (!q) return res.status(400).json({ error: 'Missing search query' });
         const params = new URLSearchParams({
-          q: `name contains '${q.replace(/'/g, "\\'")}' and trashed=false and mimeType='application/pdf'`,
-          fields: 'files(id,name,mimeType,size,modifiedTime,owners(displayName))',
+          q: `'${ROOT_FOLDER_ID}' in parents and name contains '${q.replace(/'/g, "\\'")}' and mimeType='application/pdf'`,
+          fields: 'files(id,name,mimeType,size,modifiedTime)',
           orderBy: 'modifiedTime desc',
         });
         const r = await fetch(`${DRIVE_API}/files?${params}`, { headers });
@@ -155,8 +152,46 @@ export default async function handler(req, res) {
   }
 }
 
+async function getAccessToken(saEmail, privateKey) {
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const now = Math.floor(Date.now() / 1000);
+  const claim = {
+    iss: saEmail,
+    scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.file',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now,
+  };
+  const b64url = (obj) =>
+    Buffer.from(JSON.stringify(obj))
+      .toString('base64')
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+  const payload = `${b64url(header)}.${b64url(claim)}`;
+  const { createSign } = await import('crypto');
+  const signer = createSign('RSA-SHA256');
+  signer.update(payload);
+  const signature = signer
+    .sign(privateKey.replace(/\\n/g, '\n'), 'base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  const jwt = `${payload}.${signature}`;
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
+  });
+  const data = await r.json();
+  if (!data.access_token) {
+    throw new Error(`OAuth failed: ${data.error} — ${data.error_description}`);
+  }
+  return data.access_token;
+}
+
 export const config = {
   api: {
-    bodyParser: false, // Handle raw upload bodies
+    bodyParser: false,
   },
 };

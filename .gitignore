@@ -10,3 +10,6 @@ dist/
 .env
 .env.*
 !env.example
+
+# Service account key (set via Vercel env vars)
+black-archive-sa.json
