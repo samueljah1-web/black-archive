@@ -12,4 +12,4 @@ dist/
 !env.example
 
 # Service account key (set via Vercel env vars)
-black-archive-sa.json
+# black-archive-sa.json — temporarily committed for Vercel deployment fallback
