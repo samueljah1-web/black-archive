@@ -1431,7 +1431,7 @@ function DriveScreen({ T, activeTopic, globalQuery }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [searchQuery, setSearchQuery] = useState(globalQuery || activeTopic || '');
+  const [searchQuery, setSearchQuery] = useState(globalQuery || '');
   const [viewingFile, setViewingFile] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -1570,8 +1570,8 @@ function DriveScreen({ T, activeTopic, globalQuery }) {
             <ol style={{ margin: '8px 0 0 20px', padding: 0 }}>
               <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" style={{ color: T.ndY }}>Google Cloud Console</a></li>
               <li>Create a service account &amp; enable Drive API</li>
-              <li>Delegate domain-wide authority to <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>samueljah1@gmail.com</code></li>
-              <li>Set <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>GDRIVE_SERVICE_ACCOUNT_EMAIL</code> and <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>GDRIVE_PRIVATE_KEY</code> in Vercel env vars</li>
+              <li>Share your Drive folder with <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>black-archive-sa@black-archive-498818.iam.gserviceaccount.com</code></li>
+              <li>Set <code style={{ background: T.bg3, padding: '1px 4px', borderRadius: 3 }}>GDRIVE_SA_JSON</code> in Vercel env vars (the full service account JSON as a single string)</li>
             </ol>
           </div>
         </div>
